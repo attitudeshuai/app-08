@@ -1,0 +1,175 @@
+import Router from '@koa/router';
+import prisma from '../lib/prisma';
+import { authMiddleware } from '../middleware/auth';
+import { success, badRequest, notFound } from '../utils/response';
+import { getPaginationParams, buildPaginatedResult } from '../utils/pagination';
+import { QuestionType, Difficulty } from '../types';
+
+const router = new Router({ prefix: '/api/questions' });
+
+const validQuestionTypes: QuestionType[] = ['SINGLE_CHOICE', 'MULTIPLE_CHOICE', 'TRUE_FALSE', 'FILL_BLANK', 'SHORT_ANSWER'];
+const validDifficulties: Difficulty[] = ['EASY', 'MEDIUM', 'HARD'];
+
+router.get('/', async (ctx) => {
+  const { page, pageSize, skip, take } = getPaginationParams(ctx.query);
+  const type = ctx.query.type as string;
+  const subject = ctx.query.subject as string;
+  const difficulty = ctx.query.difficulty as string;
+  const keyword = ctx.query.keyword as string;
+
+  const where: any = {};
+  if (type) {
+    if (!validQuestionTypes.includes(type as QuestionType)) {
+      badRequest(ctx, '无效的题目类型');
+      return;
+    }
+    where.type = type;
+  }
+  if (subject) where.subject = subject;
+  if (difficulty) {
+    if (!validDifficulties.includes(difficulty as Difficulty)) {
+      badRequest(ctx, '无效的难度级别');
+      return;
+    }
+    where.difficulty = difficulty;
+  }
+  if (keyword) {
+    where.content = { contains: keyword };
+  }
+
+  const [total, list] = await Promise.all([
+    prisma.question.count({ where }),
+    prisma.question.findMany({
+      where,
+      include: { user: { select: { id: true, name: true } } },
+      skip,
+      take,
+      orderBy: { id: 'desc' },
+    }),
+  ]);
+
+  success(ctx, buildPaginatedResult(list, total, page, pageSize));
+});
+
+router.get('/:id', async (ctx) => {
+  const id = Number(ctx.params.id);
+  const question = await prisma.question.findUnique({
+    where: { id },
+    include: { user: { select: { id: true, name: true } } },
+  });
+
+  if (!question) {
+    notFound(ctx, '题目');
+    return;
+  }
+
+  success(ctx, question);
+});
+
+router.post('/', authMiddleware, async (ctx) => {
+  const { type, content, options, answer, score, analysis, subject, difficulty } = ctx.request.body as {
+    type?: string;
+    content?: string;
+    options?: string[] | null;
+    answer?: string;
+    score?: number;
+    analysis?: string | null;
+    subject?: string;
+    difficulty?: string;
+  };
+  const userId = ctx.state.user.id;
+
+  if (!type || !content || !answer || !subject) {
+    badRequest(ctx, '缺少必填字段');
+    return;
+  }
+
+  if (!validQuestionTypes.includes(type as QuestionType)) {
+    badRequest(ctx, '无效的题目类型');
+    return;
+  }
+
+  if (difficulty && !validDifficulties.includes(difficulty as Difficulty)) {
+    badRequest(ctx, '无效的难度级别');
+    return;
+  }
+
+  if ((type === 'SINGLE_CHOICE' || type === 'MULTIPLE_CHOICE') && (!options || options.length === 0)) {
+    badRequest(ctx, '选择题必须提供选项');
+    return;
+  }
+
+  const question = await prisma.question.create({
+    data: {
+      type,
+      content,
+      options: options as any,
+      answer,
+      score: score || 2,
+      analysis: analysis || null,
+      subject,
+      difficulty: difficulty || 'MEDIUM',
+      createdBy: userId,
+    },
+  });
+
+  success(ctx, question);
+});
+
+router.put('/:id', authMiddleware, async (ctx) => {
+  const id = Number(ctx.params.id);
+  const { type, content, options, answer, score, analysis, subject, difficulty } = ctx.request.body as {
+    type?: string;
+    content?: string;
+    options?: string[] | null;
+    answer?: string;
+    score?: number;
+    analysis?: string | null;
+    subject?: string;
+    difficulty?: string;
+  };
+
+  const existing = await prisma.question.findUnique({ where: { id } });
+  if (!existing) {
+    notFound(ctx, '题目');
+    return;
+  }
+
+  if (type && !validQuestionTypes.includes(type as QuestionType)) {
+    badRequest(ctx, '无效的题目类型');
+    return;
+  }
+
+  if (difficulty && !validDifficulties.includes(difficulty as Difficulty)) {
+    badRequest(ctx, '无效的难度级别');
+    return;
+  }
+
+  const data: any = {};
+  if (type !== undefined) data.type = type;
+  if (content !== undefined) data.content = content;
+  if (options !== undefined) data.options = options;
+  if (answer !== undefined) data.answer = answer;
+  if (score !== undefined) data.score = score;
+  if (analysis !== undefined) data.analysis = analysis;
+  if (subject !== undefined) data.subject = subject;
+  if (difficulty !== undefined) data.difficulty = difficulty;
+
+  const question = await prisma.question.update({ where: { id }, data });
+  success(ctx, question);
+});
+
+router.delete('/:id', authMiddleware, async (ctx) => {
+  const id = Number(ctx.params.id);
+
+  const existing = await prisma.question.findUnique({ where: { id } });
+  if (!existing) {
+    notFound(ctx, '题目');
+    return;
+  }
+
+  await prisma.question.delete({ where: { id } });
+  success(ctx);
+});
+
+export default router;

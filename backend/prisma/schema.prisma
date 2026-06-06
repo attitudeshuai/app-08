@@ -1,0 +1,109 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        Int      @id @default(autoincrement())
+  username  String   @unique
+  password  String
+  role      String   @default("STUDENT")
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  questions    Question[]
+  papers       Paper[]
+  exams        Exam[]
+  examRecords  ExamRecord[]
+}
+
+model Question {
+  id         Int      @id @default(autoincrement())
+  type       String
+  content    String
+  options    Json?
+  answer     String
+  score      Float    @default(2)
+  analysis   String?
+  subject    String
+  difficulty String   @default("MEDIUM")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  createdBy Int  @map("createdById")
+  user      User @relation(fields: [createdBy], references: [id])
+
+  paperItems PaperItem[]
+}
+
+model Paper {
+  id          Int      @id @default(autoincrement())
+  title       String
+  description String?
+  totalScore  Float
+  duration    Int
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  createdBy Int  @map("createdById")
+  user      User @relation(fields: [createdBy], references: [id])
+
+  items PaperItem[]
+  exams Exam[]
+}
+
+model PaperItem {
+  id         Int   @id @default(autoincrement())
+  sortOrder  Int
+  score      Float
+  questionId Int
+  paperId    Int
+
+  question Question @relation(fields: [questionId], references: [id])
+  paper    Paper    @relation(fields: [paperId], references: [id], onDelete: Cascade)
+
+  @@index([paperId])
+  @@index([questionId])
+}
+
+model Exam {
+  id        Int      @id @default(autoincrement())
+  title     String
+  startTime DateTime
+  endTime   DateTime
+  status    String   @default("DRAFT")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  paperId    Int    @map("paperId")
+  paper      Paper  @relation(fields: [paperId], references: [id])
+  createdBy  Int    @map("createdById")
+  user       User   @relation(fields: [createdBy], references: [id])
+
+  examRecords ExamRecord[]
+}
+
+model ExamRecord {
+  id         Int      @id @default(autoincrement())
+  status     String   @default("NOT_STARTED")
+  startTime  DateTime?
+  submitTime DateTime?
+  totalScore Float?
+  answers    Json?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  examId Int  @map("examId")
+  exam   Exam @relation(fields: [examId], references: [id], onDelete: Cascade)
+  userId Int  @map("userId")
+  user   User @relation(fields: [userId], references: [id])
+
+  @@unique([examId, userId])
+  @@index([examId])
+  @@index([userId])
+}
