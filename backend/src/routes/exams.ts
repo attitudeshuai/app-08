@@ -16,7 +16,7 @@ import {
   autoSubmitExam,
   calculateRemainingTime,
 } from '../services/autoSubmitService';
-import { ExamStatus, ExamRecordStatus, ExamMonitorItem } from '../types';
+import { ExamStatus, ExamRecordStatus, ExamMonitorItem, ExamRankItem, ExamRankingOverview, StudentExamRankResult } from '../types';
 
 const router = new Router({ prefix: '/api/exams' });
 
@@ -473,6 +473,29 @@ router.get('/:id/result', authMiddleware, async (ctx) => {
     };
   }
 
+  if (record.status === 'SUBMITTED' || record.status === 'GRADED') {
+    const allRecords = await prisma.examRecord.findMany({
+      where: {
+        examId,
+        status: { in: ['SUBMITTED', 'GRADED'] },
+      },
+      include: { user: { select: { id: true, username: true, name: true } } },
+    });
+
+    const totalScore = exam?.paper?.totalScore || 100;
+    const { rankList, overview } = computeRankingStats(allRecords, totalScore);
+
+    const myRankItem = rankList.find((r) => r.userId === userId);
+    const ranking: StudentExamRankResult = {
+      rank: myRankItem?.rank || 0,
+      totalStudents: overview.totalStudents,
+      avgScore: overview.avgScore,
+      highestScore: overview.highestScore,
+    };
+
+    result.ranking = ranking;
+  }
+
   success(ctx, result);
 });
 
@@ -494,6 +517,151 @@ router.get('/:id/records', authMiddleware, roleMiddleware('ADMIN', 'TEACHER'), a
   });
 
   success(ctx, records);
+});
+
+router.get('/:id/ranking', authMiddleware, roleMiddleware('ADMIN', 'TEACHER'), async (ctx) => {
+  const examId = Number(ctx.params.id);
+  const { page, pageSize, skip, take } = getPaginationParams(ctx.query);
+
+  const exam = await prisma.exam.findUnique({
+    where: { id: examId },
+    include: { paper: { select: { id: true, title: true, totalScore: true, duration: true } } },
+  });
+
+  if (!exam) {
+    notFound(ctx, '考试');
+    return;
+  }
+
+  const totalScore = exam.paper?.totalScore || 100;
+
+  const allRecords = await prisma.examRecord.findMany({
+    where: { examId },
+    include: { user: { select: { id: true, username: true, name: true } } },
+  });
+
+  const submittedRecords = allRecords.filter(
+    (r: any) => r.status === 'SUBMITTED' || r.status === 'GRADED'
+  );
+
+  const { rankList, overview } = computeRankingStats(submittedRecords, totalScore);
+
+  const total = rankList.length;
+  const paginatedList = rankList.slice(skip, skip + take);
+
+  const notSubmittedCount = allRecords.length - submittedRecords.length;
+
+  success(ctx, {
+    overview: {
+      examId: exam.id,
+      examTitle: exam.title,
+      ...overview,
+      totalStudents: allRecords.length,
+      notSubmittedCount,
+    },
+    ...buildPaginatedResult(paginatedList, total, page, pageSize),
+  });
+});
+
+router.get('/:id/ranking/export', authMiddleware, roleMiddleware('ADMIN', 'TEACHER'), async (ctx) => {
+  const examId = Number(ctx.params.id);
+  const format = (ctx.query.format as string) || 'xlsx';
+
+  const exam = await prisma.exam.findUnique({
+    where: { id: examId },
+    include: { paper: { select: { id: true, title: true, totalScore: true, duration: true } } },
+  });
+
+  if (!exam) {
+    notFound(ctx, '考试');
+    return;
+  }
+
+  const totalScore = exam.paper?.totalScore || 100;
+
+  const allRecords = await prisma.examRecord.findMany({
+    where: { examId },
+    include: { user: { select: { id: true, username: true, name: true } } },
+  });
+
+  const submittedRecords = allRecords.filter(
+    (r: any) => r.status === 'SUBMITTED' || r.status === 'GRADED'
+  );
+
+  const { rankList, overview } = computeRankingStats(submittedRecords, totalScore);
+
+  const statusMap: Record<string, string> = {
+    NOT_STARTED: '未开始',
+    IN_PROGRESS: '进行中',
+    SUBMITTED: '已提交',
+    GRADED: '已批改',
+  };
+
+  const headers = ['排名', '学生姓名', '学号/用户名', '分数', '满分', '提交时间', '状态'];
+
+  const rows = rankList.map((item) => [
+    String(item.rank),
+    item.name,
+    item.username,
+    String(item.totalScore),
+    String(totalScore),
+    item.submitTime ? new Date(item.submitTime).toLocaleString('zh-CN') : '-',
+    statusMap[item.status] || item.status,
+  ]);
+
+  const examTitle = exam.title.replace(/[\\/:*?"<>|]/g, '_');
+  const dateStr = new Date().toLocaleDateString('zh-CN').replace(/\//g, '-');
+
+  if (format === 'csv') {
+    const csvContent = [headers, ...rows]
+      .map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(','))
+      .join('\n');
+
+    const bom = '\uFEFF';
+    const fileName = `考试排名_${examTitle}_${dateStr}.csv`;
+
+    ctx.set('Content-Type', 'text/csv; charset=utf-8');
+    ctx.set('Content-Disposition', `attachment; filename="${encodeURIComponent(fileName)}"`);
+    ctx.body = bom + csvContent;
+  } else {
+    const XLSX = await import('xlsx');
+
+    const summaryRows = [
+      ['考试名称', exam.title],
+      ['总分', String(totalScore)],
+      ['参考人数', String(allRecords.length)],
+      ['已提交人数', String(submittedRecords.length)],
+      ['平均分', String(overview.avgScore)],
+      ['最高分', String(overview.highestScore)],
+      ['最低分', String(overview.lowestScore)],
+      ['及格率', `${(overview.passRate * 100).toFixed(2)}%`],
+      ['及格分数', String(overview.passScore)],
+      [],
+    ];
+
+    const wsData = [...summaryRows, headers, ...rows];
+    const ws = XLSX.utils.aoa_to_sheet(wsData);
+
+    ws['!cols'] = [
+      { wch: 8 },
+      { wch: 12 },
+      { wch: 15 },
+      { wch: 10 },
+      { wch: 10 },
+      { wch: 22 },
+      { wch: 10 },
+    ];
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, '排名');
+
+    const fileName = `考试排名_${examTitle}_${dateStr}.xlsx`;
+    const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+    ctx.set('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    ctx.set('Content-Disposition', `attachment; filename="${encodeURIComponent(fileName)}"`);
+    ctx.body = buffer;
+  }
 });
 
 router.post('/:id/exit', authMiddleware, async (ctx) => {
@@ -599,6 +767,75 @@ function calculateAbnormalStatus(
   return {
     isAbnormal: reasons.length > 0,
     reasons,
+  };
+}
+
+function computeRankingStats(submittedRecords: any[], totalScore: number): {
+  rankList: ExamRankItem[];
+  overview: Omit<ExamRankingOverview, 'examId' | 'examTitle'>;
+} {
+  const sorted = [...submittedRecords].sort((a: any, b: any) => {
+    const scoreA = a.totalScore ?? 0;
+    const scoreB = b.totalScore ?? 0;
+    if (scoreB !== scoreA) return scoreB - scoreA;
+    const timeA = a.submitTime ? new Date(a.submitTime).getTime() : 0;
+    const timeB = b.submitTime ? new Date(b.submitTime).getTime() : 0;
+    return timeA - timeB;
+  });
+
+  const rankList: ExamRankItem[] = [];
+  let prevScore: number | null = null;
+  let prevRank = 0;
+
+  for (let i = 0; i < sorted.length; i++) {
+    const record = sorted[i];
+    const score = record.totalScore ?? 0;
+    let rank: number;
+
+    if (prevScore === null || score !== prevScore) {
+      rank = i + 1;
+      prevRank = rank;
+      prevScore = score;
+    } else {
+      rank = prevRank;
+    }
+
+    rankList.push({
+      rank,
+      userId: record.userId,
+      username: record.user?.username || '',
+      name: record.user?.name || '',
+      totalScore: score,
+      submitTime: record.submitTime,
+      status: record.status,
+    });
+  }
+
+  const scores = submittedRecords.map((r: any) => r.totalScore ?? 0).sort((a, b) => a - b);
+  const passScore = totalScore * 0.6;
+  const passCount = scores.filter((s: number) => s >= passScore).length;
+
+  let avgScore = 0;
+  let highestScore = 0;
+  let lowestScore = 0;
+
+  if (scores.length > 0) {
+    avgScore = scores.reduce((sum: number, s: number) => sum + s, 0) / scores.length;
+    highestScore = scores[scores.length - 1];
+    lowestScore = scores[0];
+  }
+
+  return {
+    rankList,
+    overview: {
+      totalStudents: submittedRecords.length,
+      submittedCount: submittedRecords.length,
+      avgScore: roundToTwo(avgScore),
+      highestScore,
+      lowestScore,
+      passRate: roundToTwo(submittedRecords.length > 0 ? passCount / submittedRecords.length : 0),
+      passScore: roundToTwo(passScore),
+    },
   };
 }
 

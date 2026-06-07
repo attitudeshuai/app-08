@@ -362,3 +362,32 @@ export interface FavoriteSubjectItem {
   subject: string;
   count: number;
 }
+
+export interface ExamRankItem {
+  rank: number;
+  userId: number;
+  username: string;
+  name: string;
+  totalScore: number;
+  submitTime: Date | null;
+  status: string;
+}
+
+export interface ExamRankingOverview {
+  examId: number;
+  examTitle: string;
+  totalStudents: number;
+  submittedCount: number;
+  avgScore: number;
+  highestScore: number;
+  lowestScore: number;
+  passRate: number;
+  passScore: number;
+}
+
+export interface StudentExamRankResult {
+  rank: number;
+  totalStudents: number;
+  avgScore: number;
+  highestScore: number;
+}
