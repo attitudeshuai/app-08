@@ -118,6 +118,36 @@ export interface DimensionStatItem {
   scoreRate: number;
 }
 
+export interface ImportErrorItem {
+  rowIndex: number;
+  rowData: Record<string, unknown>;
+  errors: string[];
+}
+
+export interface QuestionImportResult {
+  successCount: number;
+  failCount: number;
+  totalCount: number;
+  successItems: {
+    id: number;
+    type: string;
+    content: string;
+    subject: string;
+  }[];
+  errorItems: ImportErrorItem[];
+}
+
+export interface RawQuestionData {
+  type?: string;
+  content?: string;
+  options?: string;
+  answer?: string;
+  score?: string | number;
+  analysis?: string;
+  subject?: string;
+  difficulty?: string;
+}
+
 export interface ExamStatistics {
   exam: {
     id: number;

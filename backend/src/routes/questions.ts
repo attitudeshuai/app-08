@@ -1,9 +1,32 @@
 import Router from '@koa/router';
+import multer from '@koa/multer';
 import prisma from '../lib/prisma';
 import { authMiddleware } from '../middleware/auth';
 import { success, badRequest, notFound } from '../utils/response';
 import { getPaginationParams, buildPaginatedResult } from '../utils/pagination';
 import { QuestionType, Difficulty } from '../types';
+import { importQuestionsFromFile, generateTemplateBuffer, getImportTemplate } from '../services/questionImportService';
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 10 * 1024 * 1024,
+  },
+  fileFilter: (ctx, file, cb) => {
+    const allowedTypes = [
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'application/vnd.ms-excel',
+      'text/csv',
+    ];
+    const allowedExts = ['.xlsx', '.xls', '.csv'];
+    const ext = file.originalname.toLowerCase().substring(file.originalname.lastIndexOf('.'));
+    if (allowedTypes.includes(file.mimetype) || allowedExts.includes(ext)) {
+      cb(null, true);
+    } else {
+      cb(new Error('只支持 .xlsx、.xls、.csv 格式的文件'), false);
+    }
+  },
+});
 
 const router = new Router({ prefix: '/api/questions' });
 
@@ -170,6 +193,38 @@ router.delete('/:id', authMiddleware, async (ctx) => {
 
   await prisma.question.delete({ where: { id } });
   success(ctx);
+});
+
+router.get('/import/template', authMiddleware, async (ctx) => {
+  const format = ctx.query.format as string;
+  if (format === 'json') {
+    success(ctx, getImportTemplate());
+    return;
+  }
+  
+  const buffer = generateTemplateBuffer();
+  ctx.set('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  ctx.set('Content-Disposition', 'attachment; filename="question_import_template.xlsx');
+  ctx.body = buffer;
+});
+
+router.post('/import', authMiddleware, upload.single('file'), async (ctx) => {
+  const userId = ctx.state.user.id;
+  const file = ctx.file;
+  
+  if (!file) {
+    badRequest(ctx, '请上传文件');
+    return;
+  }
+  
+  const checkDuplicates = ctx.query.checkDuplicates !== 'false';
+  
+  try {
+    const result = await importQuestionsFromFile(file.buffer, userId, checkDuplicates);
+    success(ctx, result);
+  } catch (err: any) {
+    badRequest(ctx, `导入失败: ${err.message}`);
+  }
 });
 
 export default router;
