@@ -3,7 +3,7 @@ import prisma from '../lib/prisma';
 import { authMiddleware, roleMiddleware } from '../middleware/auth';
 import { success, badRequest, notFound } from '../utils/response';
 import { getPaginationParams, buildPaginatedResult } from '../utils/pagination';
-import { calculateExamScore, getWrongQuestions } from '../services/paperService';
+import { calculateExamScore, getWrongQuestions, isAnswerCorrect } from '../services/paperService';
 import { ExamStatus, ExamRecordStatus, ExamMonitorItem } from '../types';
 
 const router = new Router({ prefix: '/api/exams' });
@@ -788,9 +788,11 @@ function calculateQuestionStats(
       correctCount: 0,
       wrongCount: 0,
       unansweredCount: 0,
+      ungradedCount: 0,
       accuracyRate: 0,
       avgScore: 0,
       scoreRate: 0,
+      isObjective: isObjectiveQuestion(item.question.type),
     }));
   }
 
@@ -800,7 +802,10 @@ function calculateQuestionStats(
     let correctCount = 0;
     let wrongCount = 0;
     let unansweredCount = 0;
+    let ungradedCount = 0;
     let totalGotScore = 0;
+
+    const objective = isObjectiveQuestion(item.question.type);
 
     for (const record of submittedRecords) {
       const answers = record.answers as Record<number, string> | undefined;
@@ -812,9 +817,14 @@ function calculateQuestionStats(
         continue;
       }
 
-      const isCorrect = isAnswerCorrect(item.question.type, userAnswer, item.question.answer);
+      if (!objective) {
+        ungradedCount++;
+        continue;
+      }
 
-      if (isCorrect) {
+      const correct = isAnswerCorrect(item.question.type, userAnswer, item.question.answer);
+
+      if (correct) {
         correctCount++;
         totalGotScore += item.score;
       } else {
@@ -822,7 +832,8 @@ function calculateQuestionStats(
       }
     }
 
-    const accuracyRate = totalRecords > 0 ? roundToTwo(correctCount / totalRecords) : 0;
+    const gradedCount = correctCount + wrongCount;
+    const accuracyRate = gradedCount > 0 ? roundToTwo(correctCount / gradedCount) : 0;
     const avgScore = totalRecords > 0 ? roundToTwo(totalGotScore / totalRecords) : 0;
     const scoreRate = item.score > 0 ? roundToTwo(avgScore / item.score) : 0;
 
@@ -837,11 +848,22 @@ function calculateQuestionStats(
       correctCount,
       wrongCount,
       unansweredCount,
+      ungradedCount,
       accuracyRate,
       avgScore,
       scoreRate,
+      isObjective: objective,
     };
   });
+}
+
+function isObjectiveQuestion(questionType: string): boolean {
+  return (
+    questionType === 'SINGLE_CHOICE' ||
+    questionType === 'MULTIPLE_CHOICE' ||
+    questionType === 'TRUE_FALSE' ||
+    questionType === 'FILL_BLANK'
+  );
 }
 
 function roundToTwo(num: number): number {
@@ -867,13 +889,13 @@ function calculateDimensionStats(
     const questionCount = items.length;
     const totalScore = items.reduce((sum: number, item: any) => sum + item.score, 0);
     const totalCorrectCount = items.reduce((sum: number, item: any) => sum + item.correctCount, 0);
+    const totalWrongCount = items.reduce((sum: number, item: any) => sum + item.wrongCount, 0);
+    const totalUngradedCount = items.reduce((sum: number, item: any) => sum + item.ungradedCount, 0);
     const totalAvgScore = items.reduce((sum: number, item: any) => sum + item.avgScore, 0);
-    const totalRecords = items.length > 0
-      ? items[0].correctCount + items[0].wrongCount + items[0].unansweredCount
-      : 0;
 
-    const accuracyRate = totalRecords > 0 && questionCount > 0
-      ? roundToTwo(totalCorrectCount / (totalRecords * questionCount))
+    const gradedTotal = totalCorrectCount + totalWrongCount;
+    const accuracyRate = gradedTotal > 0
+      ? roundToTwo(totalCorrectCount / gradedTotal)
       : 0;
     const avgScore = roundToTwo(totalAvgScore);
     const scoreRate = totalScore > 0 ? roundToTwo(avgScore / totalScore) : 0;
@@ -883,6 +905,7 @@ function calculateDimensionStats(
       questionCount,
       totalScore,
       correctCount: totalCorrectCount,
+      ungradedCount: totalUngradedCount,
       accuracyRate,
       avgScore,
       scoreRate,
@@ -890,33 +913,6 @@ function calculateDimensionStats(
   }
 
   return result;
-}
-
-function isAnswerCorrect(
-  questionType: string,
-  userAnswer: string,
-  correctAnswer: string
-): boolean {
-  if (
-    questionType === 'SINGLE_CHOICE' ||
-    questionType === 'TRUE_FALSE' ||
-    questionType === 'FILL_BLANK'
-  ) {
-    return String(userAnswer).trim().toLowerCase() === String(correctAnswer).trim().toLowerCase();
-  } else if (questionType === 'MULTIPLE_CHOICE') {
-    const userSorted = String(userAnswer)
-      .split(',')
-      .map((s) => s.trim())
-      .sort()
-      .join(',');
-    const correctSorted = String(correctAnswer)
-      .split(',')
-      .map((s) => s.trim())
-      .sort()
-      .join(',');
-    return userSorted === correctSorted;
-  }
-  return false;
 }
 
 router.get('/:id/monitor/export', authMiddleware, roleMiddleware('ADMIN', 'TEACHER'), async (ctx) => {

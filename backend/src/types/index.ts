@@ -91,9 +91,11 @@ export interface QuestionStatItem {
   correctCount: number;
   wrongCount: number;
   unansweredCount: number;
+  ungradedCount: number;
   accuracyRate: number;
   avgScore: number;
   scoreRate: number;
+  isObjective: boolean;
 }
 
 export interface DimensionStatItem {
@@ -101,6 +103,7 @@ export interface DimensionStatItem {
   questionCount: number;
   totalScore: number;
   correctCount: number;
+  ungradedCount: number;
   accuracyRate: number;
   avgScore: number;
   scoreRate: number;
