@@ -16,15 +16,16 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  questions        Question[]
-  papers           Paper[]
-  paperTemplates   PaperTemplate[]
-  exams            Exam[]
-  examRecords      ExamRecord[]
-  examSessions     ExamSession[]
-  wrongQuestions   WrongQuestion[]
-  examReservations ExamReservation[]
-  notifications    Notification[]
+  questions            Question[]
+  papers               Paper[]
+  paperTemplates       PaperTemplate[]
+  exams                Exam[]
+  examRecords          ExamRecord[]
+  examSessions         ExamSession[]
+  wrongQuestions       WrongQuestion[]
+  examReservations     ExamReservation[]
+  notifications        Notification[]
+  questionHistory      QuestionHistory[]
 }
 
 model Question {
@@ -46,6 +47,31 @@ model Question {
   paperItems         PaperItem[]
   paperTemplateItems PaperTemplateItem[]
   wrongQuestions     WrongQuestion[]
+  history            QuestionHistory[]
+}
+
+model QuestionHistory {
+  id         Int      @id @default(autoincrement())
+  questionId Int
+  type       String
+  content    String
+  options    Json?
+  answer     String
+  score      Float    @default(2)
+  analysis   String?
+  subject    String
+  difficulty String   @default("MEDIUM")
+  version    Int
+  remark     String?
+  createdAt  DateTime @default(now())
+
+  modifiedBy Int  @map("modifiedById")
+  modifier   User @relation(fields: [modifiedBy], references: [id])
+
+  question Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@index([questionId])
+  @@index([modifiedBy])
 }
 
 model Paper {

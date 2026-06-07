@@ -236,3 +236,34 @@ export interface ExamWithReservation {
   reservationCount?: number;
   isReserved?: boolean;
 }
+
+export interface QuestionHistoryItem {
+  id: number;
+  questionId: number;
+  type: string;
+  content: string;
+  options?: unknown;
+  answer: string;
+  score: number;
+  analysis?: string | null;
+  subject: string;
+  difficulty: string;
+  version: number;
+  remark?: string | null;
+  createdAt: Date;
+  modifiedBy: number;
+  modifier?: {
+    id: number;
+    name: string;
+  };
+}
+
+export interface QuestionDiff {
+  field: string;
+  oldValue: unknown;
+  newValue: unknown;
+}
+
+export interface QuestionHistoryDetail extends QuestionHistoryItem {
+  diff?: QuestionDiff[];
+}

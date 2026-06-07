@@ -141,7 +141,8 @@ router.post('/', authMiddleware, async (ctx) => {
 
 router.put('/:id', authMiddleware, async (ctx) => {
   const id = Number(ctx.params.id);
-  const { type, content, options, answer, score, analysis, subject, difficulty } = ctx.request.body as {
+  const userId = ctx.state.user.id;
+  const { type, content, options, answer, score, analysis, subject, difficulty, remark } = ctx.request.body as {
     type?: string;
     content?: string;
     options?: string[] | null;
@@ -150,6 +151,7 @@ router.put('/:id', authMiddleware, async (ctx) => {
     analysis?: string | null;
     subject?: string;
     difficulty?: string;
+    remark?: string;
   };
 
   const existing = await prisma.question.findUnique({ where: { id } });
@@ -178,6 +180,35 @@ router.put('/:id', authMiddleware, async (ctx) => {
   if (subject !== undefined) data.subject = subject;
   if (difficulty !== undefined) data.difficulty = difficulty;
 
+  const hasChanges = Object.keys(data).length > 0;
+  if (!hasChanges) {
+    success(ctx, existing);
+    return;
+  }
+
+  const lastHistory = await prisma.questionHistory.findFirst({
+    where: { questionId: id },
+    orderBy: { version: 'desc' },
+  });
+  const nextVersion = lastHistory ? lastHistory.version + 1 : 1;
+
+  await prisma.questionHistory.create({
+    data: {
+      questionId: id,
+      type: existing.type,
+      content: existing.content,
+      options: existing.options as any,
+      answer: existing.answer,
+      score: existing.score,
+      analysis: existing.analysis,
+      subject: existing.subject,
+      difficulty: existing.difficulty,
+      version: nextVersion,
+      remark: remark || null,
+      modifiedBy: userId,
+    },
+  });
+
   const question = await prisma.question.update({ where: { id }, data });
   success(ctx, question);
 });
@@ -193,6 +224,116 @@ router.delete('/:id', authMiddleware, async (ctx) => {
 
   await prisma.question.delete({ where: { id } });
   success(ctx);
+});
+
+router.get('/:id/history', authMiddleware, async (ctx) => {
+  const id = Number(ctx.params.id);
+
+  const question = await prisma.question.findUnique({ where: { id } });
+  if (!question) {
+    notFound(ctx, '题目');
+    return;
+  }
+
+  const historyList = await prisma.questionHistory.findMany({
+    where: { questionId: id },
+    include: {
+      modifier: {
+        select: { id: true, name: true },
+      },
+    },
+    orderBy: { version: 'desc' },
+  });
+
+  success(ctx, historyList);
+});
+
+router.get('/:id/history/:historyId', authMiddleware, async (ctx) => {
+  const id = Number(ctx.params.id);
+  const historyId = Number(ctx.params.historyId);
+
+  const question = await prisma.question.findUnique({ where: { id } });
+  if (!question) {
+    notFound(ctx, '题目');
+    return;
+  }
+
+  const history = await prisma.questionHistory.findUnique({
+    where: { id: historyId },
+    include: {
+      modifier: {
+        select: { id: true, name: true },
+      },
+    },
+  });
+
+  if (!history || history.questionId !== id) {
+    notFound(ctx, '历史版本');
+    return;
+  }
+
+  success(ctx, history);
+});
+
+router.post('/:id/history/:historyId/revert', authMiddleware, async (ctx) => {
+  const id = Number(ctx.params.id);
+  const historyId = Number(ctx.params.historyId);
+  const userId = ctx.state.user.id;
+  const { remark } = ctx.request.body as { remark?: string };
+
+  const question = await prisma.question.findUnique({ where: { id } });
+  if (!question) {
+    notFound(ctx, '题目');
+    return;
+  }
+
+  const history = await prisma.questionHistory.findUnique({
+    where: { id: historyId },
+  });
+
+  if (!history || history.questionId !== id) {
+    notFound(ctx, '历史版本');
+    return;
+  }
+
+  const lastHistory = await prisma.questionHistory.findFirst({
+    where: { questionId: id },
+    orderBy: { version: 'desc' },
+  });
+  const nextVersion = lastHistory ? lastHistory.version + 1 : 1;
+
+  await prisma.questionHistory.create({
+    data: {
+      questionId: id,
+      type: question.type,
+      content: question.content,
+      options: question.options as any,
+      answer: question.answer,
+      score: question.score,
+      analysis: question.analysis,
+      subject: question.subject,
+      difficulty: question.difficulty,
+      version: nextVersion,
+      remark: remark || `回退到版本 ${history.version}`,
+      modifiedBy: userId,
+    },
+  });
+
+  const updatedQuestion = await prisma.question.update({
+    where: { id },
+    data: {
+      type: history.type,
+      content: history.content,
+      options: history.options as any,
+      answer: history.answer,
+      score: history.score,
+      analysis: history.analysis,
+      subject: history.subject,
+      difficulty: history.difficulty,
+    },
+  });
+
+  success(ctx, updatedQuestion);
 });
 
 router.get('/import/template', authMiddleware, async (ctx) => {
