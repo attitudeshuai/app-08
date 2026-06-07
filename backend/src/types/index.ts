@@ -29,6 +29,15 @@ export type ExamRecordStatus = 'NOT_STARTED' | 'IN_PROGRESS' | 'SUBMITTED' | 'GR
 
 export type ExamSessionStatus = 'ACTIVE' | 'ENDED' | 'ABANDONED';
 
+export interface RemainingTime {
+  totalSeconds: number;
+  hours: number;
+  minutes: number;
+  seconds: number;
+  isExpired: boolean;
+  isWarning: boolean;
+}
+
 export interface ExamMonitorItem {
   id: number;
   userId: number;

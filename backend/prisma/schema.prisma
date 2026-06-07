@@ -108,13 +108,14 @@ model PaperItem {
 }
 
 model Exam {
-  id        Int      @id @default(autoincrement())
-  title     String
-  startTime DateTime
-  endTime   DateTime
-  status    String   @default("DRAFT")
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id          Int      @id @default(autoincrement())
+  title       String
+  startTime   DateTime
+  endTime     DateTime
+  status      String   @default("DRAFT")
+  autoSubmit  Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   paperId    Int    @map("paperId")
   paper      Paper  @relation(fields: [paperId], references: [id])
@@ -135,6 +136,7 @@ model ExamRecord {
   answers        Json?
   totalActiveTime Int     @default(0)
   enterCount     Int      @default(0)
+  isAutoSubmitted Boolean  @default(false)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 

@@ -12,6 +12,10 @@ import {
   calculateDimensionStats,
   roundToTwo,
 } from '../services/paperService';
+import {
+  autoSubmitExam,
+  calculateRemainingTime,
+} from '../services/autoSubmitService';
 import { ExamStatus, ExamRecordStatus, ExamMonitorItem } from '../types';
 
 const router = new Router({ prefix: '/api/exams' });
@@ -43,7 +47,15 @@ router.get('/', authMiddleware, async (ctx) => {
     }),
   ]);
 
-  success(ctx, buildPaginatedResult(list, total, page, pageSize));
+  const listWithRemaining = list.map((exam: any) => {
+    const remaining = calculateRemainingTime(exam.endTime);
+    return {
+      ...exam,
+      remainingTime: remaining,
+    };
+  });
+
+  success(ctx, buildPaginatedResult(listWithRemaining, total, page, pageSize));
 });
 
 router.get('/:id', authMiddleware, async (ctx) => {
@@ -82,16 +94,20 @@ router.get('/:id', authMiddleware, async (ctx) => {
     }
   }
 
-  success(ctx, exam);
+  const remainingTime = calculateRemainingTime(exam.endTime);
+  const result: any = { ...exam, remainingTime };
+
+  success(ctx, result);
 });
 
 router.post('/', authMiddleware, roleMiddleware('ADMIN', 'TEACHER'), async (ctx) => {
-  const { title, paperId, startTime, endTime, status } = ctx.request.body as {
+  const { title, paperId, startTime, endTime, status, autoSubmit } = ctx.request.body as {
     title?: string;
     paperId?: number;
     startTime?: string;
     endTime?: string;
     status?: ExamStatus;
+    autoSubmit?: boolean;
   };
   const userId = ctx.state.user.id;
 
@@ -131,6 +147,7 @@ router.post('/', authMiddleware, roleMiddleware('ADMIN', 'TEACHER'), async (ctx)
       startTime: start,
       endTime: end,
       status: status || 'DRAFT',
+      autoSubmit: autoSubmit !== undefined ? autoSubmit : true,
       createdBy: userId,
     },
   });
@@ -140,12 +157,13 @@ router.post('/', authMiddleware, roleMiddleware('ADMIN', 'TEACHER'), async (ctx)
 
 router.put('/:id', authMiddleware, roleMiddleware('ADMIN', 'TEACHER'), async (ctx) => {
   const id = Number(ctx.params.id);
-  const { title, paperId, startTime, endTime, status } = ctx.request.body as {
+  const { title, paperId, startTime, endTime, status, autoSubmit } = ctx.request.body as {
     title?: string;
     paperId?: number;
     startTime?: string;
     endTime?: string;
     status?: ExamStatus;
+    autoSubmit?: boolean;
   };
 
   const existing = await prisma.exam.findUnique({ where: { id } });
@@ -187,6 +205,7 @@ router.put('/:id', authMiddleware, roleMiddleware('ADMIN', 'TEACHER'), async (ct
     data.endTime = end;
   }
   if (status) data.status = status;
+  if (autoSubmit !== undefined) data.autoSubmit = autoSubmit;
 
   const exam = await prisma.exam.update({ where: { id }, data });
   success(ctx, exam);
@@ -836,6 +855,24 @@ router.get('/:id/monitor/export', authMiddleware, roleMiddleware('ADMIN', 'TEACH
   ctx.set('Content-Type', 'text/csv; charset=utf-8');
   ctx.set('Content-Disposition', `attachment; filename="${encodeURIComponent(fileName)}"`);
   ctx.body = bom + csvContent;
+});
+
+router.post('/:id/auto-submit', authMiddleware, async (ctx) => {
+  const examId = Number(ctx.params.id);
+  const userId = ctx.state.user.id;
+
+  try {
+    const result = await autoSubmitExam(examId, userId);
+    success(ctx, result);
+  } catch (err: any) {
+    badRequest(ctx, err.message || '自动交卷失败');
+  }
+});
+
+router.post('/auto-submit/trigger', authMiddleware, roleMiddleware('ADMIN'), async (ctx) => {
+  const { processAutoSubmit } = await import('../services/autoSubmitService');
+  const result = await processAutoSubmit();
+  success(ctx, result);
 });
 
 export default router;

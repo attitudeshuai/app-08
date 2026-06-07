@@ -13,6 +13,7 @@ import paperRoutes from './routes/papers';
 import paperTemplateRoutes from './routes/paperTemplates';
 import examRoutes from './routes/exams';
 import wrongQuestionRoutes from './routes/wrongQuestions';
+import { startAutoSubmitService, stopAutoSubmitService } from './services/autoSubmitService';
 
 const app = new Koa();
 const PORT = config.port;
@@ -93,6 +94,7 @@ async function bootstrap(): Promise<void> {
     console.log(`Server is running on http://localhost:${PORT}`);
     console.log(`Environment: ${config.nodeEnv}`);
     console.log(`Health check: http://localhost:${PORT}/api/health`);
+    startAutoSubmitService();
   });
 }
 
@@ -103,12 +105,14 @@ bootstrap().catch((err) => {
 
 process.on('SIGINT', async () => {
   console.log('\nShutting down gracefully...');
+  stopAutoSubmitService();
   await prisma.$disconnect();
   process.exit(0);
 });
 
 process.on('SIGTERM', async () => {
   console.log('\nShutting down gracefully...');
+  stopAutoSubmitService();
   await prisma.$disconnect();
   process.exit(0);
 });
