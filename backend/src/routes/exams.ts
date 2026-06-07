@@ -16,7 +16,17 @@ import {
   autoSubmitExam,
   calculateRemainingTime,
 } from '../services/autoSubmitService';
-import { ExamStatus, ExamRecordStatus, ExamMonitorItem, ExamRankItem, ExamRankingOverview, StudentExamRankResult } from '../types';
+import {
+  recordTabSwitch,
+  checkIpChange,
+  getExamMonitorList,
+  getExamAbnormalSummary,
+  getStudentMonitorLogs,
+  recordMonitorLog,
+  checkAndUpdateSuspiciousStatus,
+  getExamMonitorDetail,
+} from '../services/examMonitorService';
+import { ExamStatus, ExamRecordStatus, ExamMonitorItem, ExamRankItem, ExamRankingOverview, StudentExamRankResult, ExamMonitorDetail } from '../types';
 
 const router = new Router({ prefix: '/api/exams' });
 
@@ -140,13 +150,16 @@ router.get('/:id', authMiddleware, async (ctx) => {
 });
 
 router.post('/', authMiddleware, roleMiddleware('ADMIN', 'TEACHER'), async (ctx) => {
-  const { title, paperId, startTime, endTime, status, autoSubmit } = ctx.request.body as {
+  const { title, paperId, startTime, endTime, status, autoSubmit, monitorEnabled, maxTabSwitchCount, maxIpChangeCount } = ctx.request.body as {
     title?: string;
     paperId?: number;
     startTime?: string;
     endTime?: string;
     status?: ExamStatus;
     autoSubmit?: boolean;
+    monitorEnabled?: boolean;
+    maxTabSwitchCount?: number;
+    maxIpChangeCount?: number;
   };
   const userId = ctx.state.user.id;
 
@@ -187,6 +200,9 @@ router.post('/', authMiddleware, roleMiddleware('ADMIN', 'TEACHER'), async (ctx)
       endTime: end,
       status: status || 'DRAFT',
       autoSubmit: autoSubmit !== undefined ? autoSubmit : true,
+      monitorEnabled: monitorEnabled !== undefined ? monitorEnabled : true,
+      maxTabSwitchCount: maxTabSwitchCount ?? 10,
+      maxIpChangeCount: maxIpChangeCount ?? 3,
       createdBy: userId,
     },
   });
@@ -196,13 +212,16 @@ router.post('/', authMiddleware, roleMiddleware('ADMIN', 'TEACHER'), async (ctx)
 
 router.put('/:id', authMiddleware, roleMiddleware('ADMIN', 'TEACHER'), async (ctx) => {
   const id = Number(ctx.params.id);
-  const { title, paperId, startTime, endTime, status, autoSubmit } = ctx.request.body as {
+  const { title, paperId, startTime, endTime, status, autoSubmit, monitorEnabled, maxTabSwitchCount, maxIpChangeCount } = ctx.request.body as {
     title?: string;
     paperId?: number;
     startTime?: string;
     endTime?: string;
     status?: ExamStatus;
     autoSubmit?: boolean;
+    monitorEnabled?: boolean;
+    maxTabSwitchCount?: number;
+    maxIpChangeCount?: number;
   };
 
   const existing = await prisma.exam.findUnique({ where: { id } });
@@ -245,6 +264,9 @@ router.put('/:id', authMiddleware, roleMiddleware('ADMIN', 'TEACHER'), async (ct
   }
   if (status) data.status = status;
   if (autoSubmit !== undefined) data.autoSubmit = autoSubmit;
+  if (monitorEnabled !== undefined) data.monitorEnabled = monitorEnabled;
+  if (maxTabSwitchCount !== undefined) data.maxTabSwitchCount = maxTabSwitchCount;
+  if (maxIpChangeCount !== undefined) data.maxIpChangeCount = maxIpChangeCount;
 
   const exam = await prisma.exam.update({ where: { id }, data });
   success(ctx, exam);
@@ -322,7 +344,7 @@ router.post('/:id/start', authMiddleware, async (ctx) => {
     });
   }
 
-  await prisma.examSession.create({
+  const session = await prisma.examSession.create({
     data: {
       examId,
       userId,
@@ -332,6 +354,20 @@ router.post('/:id/start', authMiddleware, async (ctx) => {
       userAgent,
     },
   });
+
+  await recordMonitorLog({
+    examId,
+    userId,
+    examRecordId: record.id,
+    type: 'ENTER_EXAM',
+    description: isFirstEnter ? '首次进入考试' : '重新进入考试',
+    ipAddress,
+    userAgent,
+    extraData: { sessionId: session.id, enterCount: record.enterCount },
+  });
+
+  await checkIpChange(examId, userId, ipAddress);
+  await checkAndUpdateSuspiciousStatus(examId, userId);
 
   success(ctx, record);
 });
@@ -386,6 +422,9 @@ router.post('/:id/submit', authMiddleware, async (ctx) => {
     totalActiveTime += sessionDuration;
   }
 
+  const ipAddress = ctx.ip || ctx.request.ip;
+  const userAgent = ctx.headers['user-agent'] || null;
+
   const updatedRecord = await prisma.$transaction(async (tx) => {
     if (lastSession && !lastSession.exitTime) {
       await tx.examSession.update({
@@ -422,6 +461,19 @@ router.post('/:id/submit', authMiddleware, async (ctx) => {
 
     return recordUpdate;
   });
+
+  await recordMonitorLog({
+    examId,
+    userId,
+    examRecordId: record.id,
+    type: 'SUBMIT_EXAM',
+    description: '学生提交考试',
+    ipAddress,
+    userAgent,
+    extraData: { totalScore, totalActiveTime },
+  });
+
+  await checkAndUpdateSuspiciousStatus(examId, userId);
 
   success(ctx, updatedRecord);
 });
@@ -667,6 +719,8 @@ router.get('/:id/ranking/export', authMiddleware, roleMiddleware('ADMIN', 'TEACH
 router.post('/:id/exit', authMiddleware, async (ctx) => {
   const examId = Number(ctx.params.id);
   const userId = ctx.state.user.id;
+  const ipAddress = ctx.ip || ctx.request.ip;
+  const userAgent = ctx.headers['user-agent'] || null;
 
   const record = await prisma.examRecord.findUnique({
     where: { examId_userId: { examId, userId } },
@@ -704,12 +758,27 @@ router.post('/:id/exit', authMiddleware, async (ctx) => {
     });
   }
 
+  await recordMonitorLog({
+    examId,
+    userId,
+    examRecordId: record.id,
+    type: 'EXIT_EXAM',
+    description: '学生退出考试',
+    ipAddress,
+    userAgent,
+    extraData: { totalActiveTime, sessionId: lastSession?.id },
+  });
+
+  await checkAndUpdateSuspiciousStatus(examId, userId);
+
   success(ctx, { message: '退出成功', totalActiveTime });
 });
 
 router.post('/:id/heartbeat', authMiddleware, async (ctx) => {
   const examId = Number(ctx.params.id);
   const userId = ctx.state.user.id;
+  const ipAddress = ctx.ip || ctx.request.ip;
+  const userAgent = ctx.headers['user-agent'] || null;
 
   const record = await prisma.examRecord.findUnique({
     where: { examId_userId: { examId, userId } },
@@ -720,7 +789,58 @@ router.post('/:id/heartbeat', authMiddleware, async (ctx) => {
     return;
   }
 
+  await checkIpChange(examId, userId, ipAddress);
+
   success(ctx, { status: 'ok', timestamp: new Date().toISOString() });
+});
+
+router.post('/:id/tab-switch', authMiddleware, async (ctx) => {
+  const examId = Number(ctx.params.id);
+  const userId = ctx.state.user.id;
+  const ipAddress = ctx.ip || ctx.request.ip;
+  const userAgent = ctx.headers['user-agent'] || null;
+  const { extraData } = ctx.request.body as { extraData?: Record<string, unknown> };
+
+  try {
+    const result = await recordTabSwitch(examId, userId, ipAddress, userAgent);
+    success(ctx, result);
+  } catch (err: any) {
+    badRequest(ctx, err.message || '切屏记录失败');
+  }
+});
+
+router.get('/:id/monitor/student/:userId', authMiddleware, roleMiddleware('ADMIN', 'TEACHER'), async (ctx) => {
+  const examId = Number(ctx.params.id);
+  const studentUserId = Number(ctx.params.userId);
+
+  try {
+    const detail = await getExamMonitorDetail(examId, studentUserId);
+    if (!detail) {
+      notFound(ctx, '监控记录');
+      return;
+    }
+    success(ctx, detail);
+  } catch (err: any) {
+    badRequest(ctx, err.message || '获取监控详情失败');
+  }
+});
+
+router.get('/:id/monitor/logs/:userId', authMiddleware, roleMiddleware('ADMIN', 'TEACHER'), async (ctx) => {
+  const examId = Number(ctx.params.id);
+  const studentUserId = Number(ctx.params.userId);
+  const { page, pageSize } = getPaginationParams(ctx.query);
+  const type = ctx.query.type as string | undefined;
+
+  try {
+    const result = await getStudentMonitorLogs(examId, studentUserId, {
+      type,
+      page,
+      pageSize,
+    });
+    success(ctx, result);
+  } catch (err: any) {
+    badRequest(ctx, err.message || '获取监控日志失败');
+  }
 });
 
 function formatDuration(seconds: number): string {
@@ -842,92 +962,40 @@ function computeRankingStats(submittedRecords: any[], totalScore: number): {
 router.get('/:id/monitor', authMiddleware, roleMiddleware('ADMIN', 'TEACHER'), async (ctx) => {
   const examId = Number(ctx.params.id);
 
-  const exam = await prisma.exam.findUnique({
-    where: { id: examId },
-    include: { paper: { select: { id: true, title: true, duration: true, totalScore: true } } },
-  });
+  try {
+    const result = await getExamMonitorList(examId);
 
-  if (!exam) {
-    notFound(ctx, '考试');
-    return;
-  }
+    const reservationCount = await prisma.examReservation.count({ where: { examId } });
 
-  const examDuration = exam.paper?.duration || 0;
-
-  const records = await prisma.examRecord.findMany({
-    where: { examId },
-    include: {
-      user: { select: { id: true, username: true, name: true } },
-      sessions: {
-        orderBy: { enterTime: 'asc' },
-        select: {
-          id: true,
-          enterTime: true,
-          exitTime: true,
-          ipAddress: true,
-        },
+    success(ctx, {
+      ...result,
+      stats: {
+        ...result.stats,
+        reservationCount,
       },
-    },
-    orderBy: { id: 'asc' },
-  });
-
-  const monitorList = records.map((record: any) => {
-    const sessionsWithDuration = record.sessions.map((session: any) => {
-      const endTime = session.exitTime ? new Date(session.exitTime) : new Date();
-      const duration = Math.floor((endTime.getTime() - new Date(session.enterTime).getTime()) / 1000);
-      return {
-        id: session.id,
-        enterTime: session.enterTime,
-        exitTime: session.exitTime,
-        ipAddress: session.ipAddress,
-        duration,
-      };
     });
+  } catch (err: any) {
+    if (err.message === '考试不存在') {
+      notFound(ctx, '考试');
+    } else {
+      badRequest(ctx, err.message || '获取监控数据失败');
+    }
+  }
+});
 
-    const { isAbnormal, reasons } = calculateAbnormalStatus(record, examDuration);
+router.get('/:id/monitor/abnormal-summary', authMiddleware, roleMiddleware('ADMIN', 'TEACHER'), async (ctx) => {
+  const examId = Number(ctx.params.id);
 
-    return {
-      id: record.id,
-      userId: record.userId,
-      username: record.user.username,
-      name: record.user.name,
-      status: record.status,
-      startTime: record.startTime,
-      submitTime: record.submitTime,
-      enterCount: record.enterCount || 0,
-      totalActiveTime: record.totalActiveTime || 0,
-      totalActiveTimeFormatted: formatDuration(record.totalActiveTime || 0),
-      examDuration,
-      isAbnormal,
-      abnormalReasons: reasons,
-      sessions: sessionsWithDuration,
-    };
-  });
-
-  const stats = {
-    totalStudents: records.length,
-    reservationCount: 0,
-    inProgressCount: records.filter((r: any) => r.status === 'IN_PROGRESS').length,
-    submittedCount: records.filter((r: any) => r.status === 'SUBMITTED' || r.status === 'GRADED').length,
-    notStartedCount: records.filter((r: any) => r.status === 'NOT_STARTED').length,
-    abnormalCount: monitorList.filter((m: any) => m.isAbnormal).length,
-  };
-
-  const reservationCount = await prisma.examReservation.count({ where: { examId } });
-  stats.reservationCount = reservationCount;
-
-  success(ctx, {
-    exam: {
-      id: exam.id,
-      title: exam.title,
-      startTime: exam.startTime,
-      endTime: exam.endTime,
-      status: exam.status,
-      paper: exam.paper,
-    },
-    stats,
-    list: monitorList,
-  });
+  try {
+    const result = await getExamAbnormalSummary(examId);
+    success(ctx, result);
+  } catch (err: any) {
+    if (err.message === '考试不存在') {
+      notFound(ctx, '考试');
+    } else {
+      badRequest(ctx, err.message || '获取异常汇总失败');
+    }
+  }
 });
 
 router.get('/:id/statistics', authMiddleware, roleMiddleware('ADMIN', 'TEACHER'), async (ctx) => {
@@ -1051,93 +1119,71 @@ router.get('/:id/statistics', authMiddleware, roleMiddleware('ADMIN', 'TEACHER')
 router.get('/:id/monitor/export', authMiddleware, roleMiddleware('ADMIN', 'TEACHER'), async (ctx) => {
   const examId = Number(ctx.params.id);
 
-  const exam = await prisma.exam.findUnique({
-    where: { id: examId },
-    include: { paper: { select: { id: true, title: true, duration: true } } },
-  });
+  try {
+    const { exam, list } = await getExamMonitorList(examId);
 
-  if (!exam) {
-    notFound(ctx, '考试');
-    return;
-  }
-
-  const examDuration = exam.paper?.duration || 0;
-
-  const records = await prisma.examRecord.findMany({
-    where: { examId },
-    include: {
-      user: { select: { id: true, username: true, name: true } },
-      sessions: {
-        orderBy: { enterTime: 'asc' },
-        select: {
-          id: true,
-          enterTime: true,
-          exitTime: true,
-          ipAddress: true,
-        },
-      },
-    },
-    orderBy: { id: 'asc' },
-  });
-
-  const headers = [
-    '学生姓名',
-    '学号/用户名',
-    '考试状态',
-    '进入次数',
-    '开始答题时间',
-    '提交时间',
-    '累计答题用时',
-    '考试规定时长(分钟)',
-    '是否异常',
-    '异常原因',
-    '各次进入时间',
-    '各次退出时间',
-    '各次IP地址',
-  ];
-
-  const statusMap: Record<string, string> = {
-    NOT_STARTED: '未开始',
-    IN_PROGRESS: '进行中',
-    SUBMITTED: '已提交',
-    GRADED: '已批改',
-  };
-
-  const rows = records.map((record: any) => {
-    const { isAbnormal, reasons } = calculateAbnormalStatus(record, examDuration);
-    const sessions = record.sessions || [];
-
-    const enterTimes = sessions.map((s: any) => s.enterTime ? new Date(s.enterTime).toLocaleString('zh-CN') : '').join('; ');
-    const exitTimes = sessions.map((s: any) => s.exitTime ? new Date(s.exitTime).toLocaleString('zh-CN') : '进行中').join('; ');
-    const ipAddresses = sessions.map((s: any) => s.ipAddress || '未知').join('; ');
-
-    return [
-      record.user.name,
-      record.user.username,
-      statusMap[record.status] || record.status,
-      String(record.enterCount || 0),
-      record.startTime ? new Date(record.startTime).toLocaleString('zh-CN') : '',
-      record.submitTime ? new Date(record.submitTime).toLocaleString('zh-CN') : '',
-      formatDuration(record.totalActiveTime || 0),
-      String(examDuration),
-      isAbnormal ? '是' : '否',
-      reasons.join('; '),
-      enterTimes,
-      exitTimes,
-      ipAddresses,
+    const headers = [
+      '学生姓名',
+      '学号/用户名',
+      '考试状态',
+      '进入次数',
+      '切屏次数',
+      'IP变化次数',
+      '开始答题时间',
+      '提交时间',
+      '累计答题用时',
+      '考试规定时长(分钟)',
+      '是否可疑',
+      '可疑原因',
+      '是否异常',
+      '异常原因',
+      '使用的IP地址',
     ];
-  });
 
-  const csvContent = [headers, ...rows]
-    .map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(','))
-    .join('\n');
+    const statusMap: Record<string, string> = {
+      NOT_STARTED: '未开始',
+      IN_PROGRESS: '进行中',
+      SUBMITTED: '已提交',
+      GRADED: '已批改',
+    };
 
-  const bom = '\uFEFF';
-  const fileName = `考试监控报告_${exam.title}_${new Date().toLocaleDateString('zh-CN').replace(/\//g, '-')}.csv`;
+    const rows = list.map((item: any) => {
+      return [
+        item.name,
+        item.username,
+        statusMap[item.status] || item.status,
+        String(item.enterCount || 0),
+        String(item.tabSwitchCount || 0),
+        String(item.ipChangeCount || 0),
+        item.startTime ? new Date(item.startTime).toLocaleString('zh-CN') : '',
+        item.submitTime ? new Date(item.submitTime).toLocaleString('zh-CN') : '',
+        item.totalActiveTimeFormatted,
+        String(item.examDuration),
+        item.isSuspicious ? '是' : '否',
+        item.suspiciousReasons?.join('; ') || '',
+        item.isAbnormal ? '是' : '否',
+        item.abnormalReasons?.join('; ') || '',
+        item.ipAddresses?.join('; ') || '',
+      ];
+    });
 
-  ctx.set('Content-Type', 'text/csv; charset=utf-8');
-  ctx.set('Content-Disposition', `attachment; filename="${encodeURIComponent(fileName)}"`);
-  ctx.body = bom + csvContent;
+    const csvContent = [headers, ...rows]
+      .map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(','))
+      .join('\n');
+
+    const bom = '\uFEFF';
+    const fileName = `考试监控报告_${exam.title}_${new Date().toLocaleDateString('zh-CN').replace(/\//g, '-')}.csv`;
+
+    ctx.set('Content-Type', 'text/csv; charset=utf-8');
+    ctx.set('Content-Disposition', `attachment; filename="${encodeURIComponent(fileName)}"`);
+    ctx.body = bom + csvContent;
+  } catch (err: any) {
+    if (err.message === '考试不存在') {
+      notFound(ctx, '考试');
+    } else {
+      badRequest(ctx, err.message || '导出监控报告失败');
+    }
+  }
 });
 
 router.post('/:id/auto-submit', authMiddleware, async (ctx) => {

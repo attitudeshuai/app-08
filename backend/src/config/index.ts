@@ -8,6 +8,12 @@ export const config = {
   bcryptSaltRounds: 10,
   defaultPageSize: 10,
   maxPageSize: 100,
+  monitor: {
+    defaultMaxTabSwitchCount: 10,
+    defaultMaxIpChangeCount: 3,
+    defaultMonitorEnabled: true,
+    heartbeatInterval: 30,
+  },
 } as const;
 
 export function validateConfig(): void {

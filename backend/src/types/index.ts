@@ -56,6 +56,7 @@ export interface ExamMonitorItem {
   submitTime: Date | null;
   enterCount: number;
   totalActiveTime: number;
+  totalActiveTimeFormatted: string;
   examDuration: number;
   isAbnormal: boolean;
   abnormalReasons: string[];
@@ -390,4 +391,80 @@ export interface StudentExamRankResult {
   totalStudents: number;
   avgScore: number;
   highestScore: number;
+}
+
+export type MonitorLogType =
+  | 'TAB_SWITCH'
+  | 'IP_CHANGE'
+  | 'ENTER_EXAM'
+  | 'EXIT_EXAM'
+  | 'SUBMIT_EXAM'
+  | 'HEARTBEAT'
+  | 'SYSTEM';
+
+export interface ExamMonitorLogItem {
+  id: number;
+  type: MonitorLogType;
+  description: string | null;
+  ipAddress: string | null;
+  userAgent: string | null;
+  extraData?: Record<string, unknown> | null;
+  createdAt: Date;
+  examId: number;
+  userId: number;
+  examRecordId: number;
+}
+
+export interface ExamMonitorConfig {
+  monitorEnabled: boolean;
+  maxTabSwitchCount: number;
+  maxIpChangeCount: number;
+}
+
+export interface ExamAbnormalDetail {
+  type: string;
+  count: number;
+  threshold: number;
+  exceeded: boolean;
+  description: string;
+}
+
+export interface ExamMonitorDetail extends ExamMonitorItem {
+  tabSwitchCount: number;
+  ipChangeCount: number;
+  isSuspicious: boolean;
+  suspiciousReasons: string[];
+  ipAddresses: string[];
+  abnormalDetails: ExamAbnormalDetail[];
+}
+
+export interface ExamMonitorStats {
+  totalStudents: number;
+  inProgressCount: number;
+  submittedCount: number;
+  notStartedCount: number;
+  suspiciousCount: number;
+  abnormalCount: number;
+  totalTabSwitches: number;
+  totalIpChanges: number;
+}
+
+export interface ExamMonitorLogWithUser extends ExamMonitorLogItem {
+  userName?: string;
+  userUsername?: string;
+}
+
+export interface ExamAbnormalSummary {
+  exam: {
+    id: number;
+    title: string;
+    startTime: Date;
+    endTime: Date;
+    status: string;
+    monitorConfig: ExamMonitorConfig;
+  };
+  stats: ExamMonitorStats;
+  topAbnormalStudents: ExamMonitorDetail[];
+  suspiciousStudents: ExamMonitorDetail[];
+  recentLogs: ExamMonitorLogWithUser[];
 }

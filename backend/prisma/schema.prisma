@@ -28,6 +28,7 @@ model User {
   questionHistory      QuestionHistory[]
   questionTags         QuestionTag[]
   favoriteQuestions    FavoriteQuestion[]
+  monitorLogs          ExamMonitorLog[]
 }
 
 model Question {
@@ -146,6 +147,9 @@ model Exam {
   endTime     DateTime
   status      String   @default("DRAFT")
   autoSubmit  Boolean  @default(true)
+  monitorEnabled   Boolean  @default(true)
+  maxTabSwitchCount Int    @default(10)
+  maxIpChangeCount Int     @default(3)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -158,6 +162,7 @@ model Exam {
   examSessions     ExamSession[]
   wrongQuestions   WrongQuestion[]
   examReservations ExamReservation[]
+  monitorLogs      ExamMonitorLog[]
 }
 
 model ExamRecord {
@@ -170,6 +175,10 @@ model ExamRecord {
   totalActiveTime Int     @default(0)
   enterCount     Int      @default(0)
   isAutoSubmitted Boolean  @default(false)
+  isSuspicious   Boolean  @default(false)
+  suspiciousReasons Json?
+  tabSwitchCount Int      @default(0)
+  ipChangeCount  Int      @default(0)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -180,10 +189,12 @@ model ExamRecord {
 
   wrongQuestions WrongQuestion[]
   sessions       ExamSession[]
+  monitorLogs    ExamMonitorLog[]
 
   @@unique([examId, userId])
   @@index([examId])
   @@index([userId])
+  @@index([isSuspicious])
 }
 
 model ExamSession {
@@ -205,6 +216,29 @@ model ExamSession {
   @@index([examId])
   @@index([userId])
   @@index([examRecordId])
+}
+
+model ExamMonitorLog {
+  id            Int      @id @default(autoincrement())
+  type          String
+  description   String?
+  ipAddress     String?
+  userAgent     String?
+  extraData     Json?
+  createdAt     DateTime @default(now())
+
+  examId       Int        @map("examId")
+  exam         Exam       @relation(fields: [examId], references: [id], onDelete: Cascade)
+  userId       Int        @map("userId")
+  user         User       @relation(fields: [userId], references: [id])
+  examRecordId Int        @map("examRecordId")
+  examRecord   ExamRecord @relation(fields: [examRecordId], references: [id], onDelete: Cascade)
+
+  @@index([examId])
+  @@index([userId])
+  @@index([examRecordId])
+  @@index([type])
+  @@index([createdAt])
 }
 
 model WrongQuestion {
