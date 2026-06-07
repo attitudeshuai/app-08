@@ -223,4 +223,52 @@ router.post('/:id/auto-generate', authMiddleware, async (ctx) => {
   success(ctx, paper);
 });
 
+router.post('/:id/save-as-template', authMiddleware, async (ctx) => {
+  const id = Number(ctx.params.id);
+  const { name, description } = ctx.request.body as {
+    name?: string;
+    description?: string;
+  };
+  const userId = ctx.state.user.id;
+
+  const paper = await prisma.paper.findUnique({
+    where: { id },
+    include: {
+      items: {
+        orderBy: { sortOrder: 'asc' },
+      },
+    },
+  });
+
+  if (!paper) {
+    notFound(ctx, '试卷');
+    return;
+  }
+
+  if (!name) {
+    badRequest(ctx, '请输入模板名称');
+    return;
+  }
+
+  const template = await prisma.paperTemplate.create({
+    data: {
+      name,
+      description: description || paper.description,
+      totalScore: paper.totalScore,
+      duration: paper.duration,
+      createdBy: userId,
+      items: {
+        create: paper.items.map((item: any) => ({
+          questionId: item.questionId,
+          sortOrder: item.sortOrder,
+          score: item.score,
+        })),
+      },
+    },
+    include: { items: true },
+  });
+
+  success(ctx, template);
+});
+
 export default router;

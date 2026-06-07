@@ -10,6 +10,7 @@ import authRoutes from './routes/auth';
 import userRoutes from './routes/users';
 import questionRoutes from './routes/questions';
 import paperRoutes from './routes/papers';
+import paperTemplateRoutes from './routes/paperTemplates';
 import examRoutes from './routes/exams';
 import wrongQuestionRoutes from './routes/wrongQuestions';
 
@@ -81,6 +82,8 @@ async function bootstrap(): Promise<void> {
   app.use(questionRoutes.allowedMethods());
   app.use(paperRoutes.routes());
   app.use(paperRoutes.allowedMethods());
+  app.use(paperTemplateRoutes.routes());
+  app.use(paperTemplateRoutes.allowedMethods());
   app.use(examRoutes.routes());
   app.use(examRoutes.allowedMethods());
   app.use(wrongQuestionRoutes.routes());

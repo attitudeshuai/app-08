@@ -18,6 +18,7 @@ model User {
 
   questions      Question[]
   papers         Paper[]
+  paperTemplates PaperTemplate[]
   exams          Exam[]
   examRecords    ExamRecord[]
   examSessions   ExamSession[]
@@ -40,8 +41,9 @@ model Question {
   createdBy Int  @map("createdById")
   user      User @relation(fields: [createdBy], references: [id])
 
-  paperItems     PaperItem[]
-  wrongQuestions WrongQuestion[]
+  paperItems         PaperItem[]
+  paperTemplateItems PaperTemplateItem[]
+  wrongQuestions     WrongQuestion[]
 }
 
 model Paper {
@@ -58,6 +60,37 @@ model Paper {
 
   items PaperItem[]
   exams Exam[]
+}
+
+model PaperTemplate {
+  id          Int      @id @default(autoincrement())
+  name        String
+  description String?
+  totalScore  Float
+  duration    Int
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  createdBy Int  @map("createdById")
+  user      User @relation(fields: [createdBy], references: [id])
+
+  items PaperTemplateItem[]
+
+  @@index([createdBy])
+}
+
+model PaperTemplateItem {
+  id         Int   @id @default(autoincrement())
+  sortOrder  Int
+  score      Float
+  questionId Int
+  templateId Int
+
+  question Question       @relation(fields: [questionId], references: [id])
+  template PaperTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  @@index([templateId])
+  @@index([questionId])
 }
 
 model PaperItem {
