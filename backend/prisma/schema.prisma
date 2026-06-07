@@ -29,6 +29,8 @@ model User {
   questionTags         QuestionTag[]
   favoriteQuestions    FavoriteQuestion[]
   monitorLogs          ExamMonitorLog[]
+  questionDiscussions  QuestionDiscussion[]
+  discussionLikes      QuestionDiscussionLike[]
 }
 
 model Question {
@@ -52,6 +54,7 @@ model Question {
   wrongQuestions     WrongQuestion[]
   history            QuestionHistory[]
   favoriteQuestions  FavoriteQuestion[]
+  discussions        QuestionDiscussion[]
 }
 
 model QuestionHistory {
@@ -340,4 +343,43 @@ model FavoriteQuestionTag {
   @@unique([favoriteId, tagId])
   @@index([favoriteId])
   @@index([tagId])
+}
+
+model QuestionDiscussion {
+  id         Int      @id @default(autoincrement())
+  content    String
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  questionId Int      @map("questionId")
+  question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  userId     Int   @map("userId")
+  user       User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  parentId   Int?               @map("parentId")
+  parent     QuestionDiscussion? @relation("DiscussionReplies", fields: [parentId], references: [id], onDelete: Cascade)
+
+  replies    QuestionDiscussion[] @relation("DiscussionReplies")
+  likes      QuestionDiscussionLike[]
+
+  @@index([questionId])
+  @@index([userId])
+  @@index([parentId])
+  @@index([createdAt])
+}
+
+model QuestionDiscussionLike {
+  id           Int                @id @default(autoincrement())
+  createdAt    DateTime           @default(now())
+
+  discussionId Int                @map("discussionId")
+  discussion   QuestionDiscussion @relation(fields: [discussionId], references: [id], onDelete: Cascade)
+
+  userId       Int                @map("userId")
+  user         User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([discussionId, userId])
+  @@index([discussionId])
+  @@index([userId])
 }

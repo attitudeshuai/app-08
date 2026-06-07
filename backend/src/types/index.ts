@@ -468,3 +468,32 @@ export interface ExamAbnormalSummary {
   suspiciousStudents: ExamMonitorDetail[];
   recentLogs: ExamMonitorLogWithUser[];
 }
+
+export interface QuestionDiscussionItem {
+  id: number;
+  content: string;
+  createdAt: Date;
+  updatedAt: Date;
+  questionId: number;
+  userId: number;
+  parentId: number | null;
+  user: {
+    id: number;
+    name: string;
+    role: string;
+  };
+  likeCount: number;
+  isLiked: boolean;
+  replyCount: number;
+  replies?: QuestionDiscussionItem[];
+}
+
+export interface QuestionDiscussionCreateInput {
+  content: string;
+  parentId?: number;
+}
+
+export interface QuestionDiscussionLikeStatus {
+  isLiked: boolean;
+  likeCount: number;
+}

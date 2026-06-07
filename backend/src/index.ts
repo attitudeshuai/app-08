@@ -16,6 +16,7 @@ import wrongQuestionRoutes from './routes/wrongQuestions';
 import examReservationRoutes from './routes/examReservations';
 import notificationRoutes from './routes/notifications';
 import favoriteQuestionRoutes from './routes/favoriteQuestions';
+import questionDiscussionRoutes from './routes/questionDiscussions';
 import { startAutoSubmitService, stopAutoSubmitService } from './services/autoSubmitService';
 import { startExamReminderService, stopExamReminderService } from './services/examReminderService';
 
@@ -99,6 +100,8 @@ async function bootstrap(): Promise<void> {
   app.use(notificationRoutes.allowedMethods());
   app.use(favoriteQuestionRoutes.routes());
   app.use(favoriteQuestionRoutes.allowedMethods());
+  app.use(questionDiscussionRoutes.routes());
+  app.use(questionDiscussionRoutes.allowedMethods());
 
   app.listen(PORT, () => {
     console.log(`Server is running on http://localhost:${PORT}`);
