@@ -1,8 +1,78 @@
 import prisma from '../lib/prisma';
 import { calculateExamScore, getWrongQuestions } from './paperService';
 
-const AUTO_SUBMIT_INTERVAL = 60 * 1000;
+const AUTO_SUBMIT_INTERVAL = 10 * 1000;
 let autoSubmitTimer: NodeJS.Timeout | null = null;
+
+interface SubmitExamRecordParams {
+  exam: any;
+  record: any;
+  isAuto?: boolean;
+}
+
+export async function submitExamRecord({
+  exam,
+  record,
+  isAuto = false,
+}: SubmitExamRecordParams): Promise<any> {
+  const now = new Date();
+  const answers = record.answers as Record<number, string> | undefined;
+  const paperItems = exam.paper?.items || [];
+
+  let totalScore = 0;
+  let wrongItems: any[] = [];
+  if (paperItems.length > 0) {
+    totalScore = calculateExamScore(paperItems, answers);
+    wrongItems = getWrongQuestions(paperItems, answers);
+  }
+
+  let totalActiveTime = record.totalActiveTime || 0;
+  const lastSession = record.sessions && record.sessions.length > 0 ? record.sessions[0] : null;
+  if (lastSession && !lastSession.exitTime) {
+    const sessionDuration = Math.floor((now.getTime() - lastSession.enterTime.getTime()) / 1000);
+    totalActiveTime += sessionDuration;
+  }
+
+  const updatedRecord = await prisma.$transaction(async (tx) => {
+    if (lastSession && !lastSession.exitTime) {
+      await tx.examSession.update({
+        where: { id: lastSession.id },
+        data: { exitTime: now },
+      });
+    }
+
+    const recordUpdate = await tx.examRecord.update({
+      where: { id: record.id },
+      data: {
+        status: 'SUBMITTED',
+        submitTime: now,
+        totalScore,
+        answers: answers || {},
+        totalActiveTime,
+        isAutoSubmitted: isAuto,
+      },
+    });
+
+    if (wrongItems.length > 0) {
+      const wrongQuestionData = wrongItems.map((item) => ({
+        userId: record.userId,
+        questionId: item.questionId,
+        examId: exam.id,
+        examRecordId: record.id,
+        userAnswer: item.userAnswer || null,
+        correctAnswer: item.correctAnswer,
+        subject: item.subject,
+      }));
+      await tx.wrongQuestion.createMany({
+        data: wrongQuestionData,
+      });
+    }
+
+    return recordUpdate;
+  });
+
+  return updatedRecord;
+}
 
 export async function processAutoSubmit(): Promise<{ processed: number; failed: number }> {
   const now = new Date();
@@ -39,7 +109,7 @@ export async function processAutoSubmit(): Promise<{ processed: number; failed: 
 
       for (const record of records) {
         try {
-          await submitExamRecord(exam, record);
+          await submitExamRecord({ exam, record, isAuto: true });
           processed++;
         } catch (err) {
           console.error(`Failed to auto-submit record ${record.id}:`, err);
@@ -77,68 +147,12 @@ export async function processAutoSubmit(): Promise<{ processed: number; failed: 
   return { processed, failed };
 }
 
-async function submitExamRecord(exam: any, record: any): Promise<void> {
-  const now = new Date();
-  const answers = record.answers as Record<number, string> | undefined;
-  const paperItems = exam.paper?.items || [];
-
-  let totalScore = 0;
-  let wrongItems: any[] = [];
-  if (paperItems.length > 0) {
-    totalScore = calculateExamScore(paperItems, answers);
-    wrongItems = getWrongQuestions(paperItems, answers);
-  }
-
-  let totalActiveTime = record.totalActiveTime || 0;
-  const lastSession = record.sessions && record.sessions.length > 0 ? record.sessions[0] : null;
-  if (lastSession && !lastSession.exitTime) {
-    const sessionDuration = Math.floor((now.getTime() - lastSession.enterTime.getTime()) / 1000);
-    totalActiveTime += sessionDuration;
-  }
-
-  await prisma.$transaction(async (tx) => {
-    if (lastSession && !lastSession.exitTime) {
-      await tx.examSession.update({
-        where: { id: lastSession.id },
-        data: { exitTime: now },
-      });
-    }
-
-    await tx.examRecord.update({
-      where: { id: record.id },
-      data: {
-        status: 'SUBMITTED',
-        submitTime: now,
-        totalScore,
-        answers: answers || {},
-        totalActiveTime,
-        isAutoSubmitted: true,
-      },
-    });
-
-    if (wrongItems.length > 0) {
-      const wrongQuestionData = wrongItems.map((item) => ({
-        userId: record.userId,
-        questionId: item.questionId,
-        examId: exam.id,
-        examRecordId: record.id,
-        userAnswer: item.userAnswer || null,
-        correctAnswer: item.correctAnswer,
-        subject: item.subject,
-      }));
-      await tx.wrongQuestion.createMany({
-        data: wrongQuestionData,
-      });
-    }
-  });
-}
-
 export function startAutoSubmitService(): void {
   if (autoSubmitTimer) {
     return;
   }
 
-  console.log('[AutoSubmit] Service started');
+  console.log('[AutoSubmit] Service started (interval: 10s)');
   autoSubmitTimer = setInterval(() => {
     processAutoSubmit().catch((err) => {
       console.error('[AutoSubmit] Error in auto-submit process:', err);
@@ -173,6 +187,15 @@ export async function autoSubmitExam(examId: number, userId: number): Promise<an
     throw new Error('考试不存在');
   }
 
+  const now = new Date();
+  if (now < exam.endTime) {
+    throw new Error('考试尚未结束，无法自动交卷');
+  }
+
+  if (!exam.autoSubmit) {
+    throw new Error('本场考试未开启自动交卷功能');
+  }
+
   const record = await prisma.examRecord.findUnique({
     where: { examId_userId: { examId, userId } },
     include: { sessions: { orderBy: { enterTime: 'desc' }, take: 1 } },
@@ -190,61 +213,7 @@ export async function autoSubmitExam(examId: number, userId: number): Promise<an
     throw new Error('考试未进行中');
   }
 
-  const now = new Date();
-  const answers = record.answers as Record<number, string> | undefined;
-
-  let totalScore = 0;
-  let wrongItems: any[] = [];
-  if (exam.paper && exam.paper.items) {
-    totalScore = calculateExamScore(exam.paper.items as any, answers);
-    wrongItems = getWrongQuestions(exam.paper.items as any, answers);
-  }
-
-  let totalActiveTime = record.totalActiveTime || 0;
-  const lastSession = record.sessions && record.sessions.length > 0 ? record.sessions[0] : null;
-  if (lastSession && !lastSession.exitTime) {
-    const sessionDuration = Math.floor((now.getTime() - lastSession.enterTime.getTime()) / 1000);
-    totalActiveTime += sessionDuration;
-  }
-
-  const updatedRecord = await prisma.$transaction(async (tx) => {
-    if (lastSession && !lastSession.exitTime) {
-      await tx.examSession.update({
-        where: { id: lastSession.id },
-        data: { exitTime: now },
-      });
-    }
-
-    const recordUpdate = await tx.examRecord.update({
-      where: { id: record.id },
-      data: {
-        status: 'SUBMITTED',
-        submitTime: now,
-        totalScore,
-        answers: answers || {},
-        totalActiveTime,
-        isAutoSubmitted: true,
-      },
-    });
-
-    if (wrongItems.length > 0) {
-      const wrongQuestionData = wrongItems.map((item) => ({
-        userId,
-        questionId: item.questionId,
-        examId,
-        examRecordId: record.id,
-        userAnswer: item.userAnswer || null,
-        correctAnswer: item.correctAnswer,
-        subject: item.subject,
-      }));
-      await tx.wrongQuestion.createMany({
-        data: wrongQuestionData,
-      });
-    }
-
-    return recordUpdate;
-  });
-
+  const updatedRecord = await submitExamRecord({ exam, record, isAuto: true });
   return updatedRecord;
 }
 
