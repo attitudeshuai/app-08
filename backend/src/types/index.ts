@@ -27,6 +27,32 @@ export type ExamStatus = 'DRAFT' | 'PUBLISHED' | 'ENDED';
 
 export type ExamRecordStatus = 'NOT_STARTED' | 'IN_PROGRESS' | 'SUBMITTED' | 'GRADED';
 
+export type ExamSessionStatus = 'ACTIVE' | 'ENDED' | 'ABANDONED';
+
+export interface ExamMonitorItem {
+  id: number;
+  userId: number;
+  username: string;
+  name: string;
+  status: string;
+  startTime: Date | null;
+  submitTime: Date | null;
+  enterCount: number;
+  totalActiveTime: number;
+  examDuration: number;
+  isAbnormal: boolean;
+  abnormalReasons: string[];
+  sessions: ExamSessionItem[];
+}
+
+export interface ExamSessionItem {
+  id: number;
+  enterTime: Date;
+  exitTime: Date | null;
+  ipAddress: string | null;
+  duration: number;
+}
+
 export interface PaginationQuery {
   page: number;
   pageSize: number;

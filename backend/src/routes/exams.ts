@@ -4,7 +4,7 @@ import { authMiddleware, roleMiddleware } from '../middleware/auth';
 import { success, badRequest, notFound } from '../utils/response';
 import { getPaginationParams, buildPaginatedResult } from '../utils/pagination';
 import { calculateExamScore, getWrongQuestions } from '../services/paperService';
-import { ExamStatus, ExamRecordStatus } from '../types';
+import { ExamStatus, ExamRecordStatus, ExamMonitorItem } from '../types';
 
 const router = new Router({ prefix: '/api/exams' });
 
@@ -200,6 +200,8 @@ router.delete('/:id', authMiddleware, roleMiddleware('ADMIN', 'TEACHER'), async 
 router.post('/:id/start', authMiddleware, async (ctx) => {
   const examId = Number(ctx.params.id);
   const userId = ctx.state.user.id;
+  const ipAddress = ctx.ip || ctx.request.ip;
+  const userAgent = ctx.headers['user-agent'] || null;
 
   const exam = await prisma.exam.findUnique({ where: { id: examId } });
   if (!exam) {
@@ -226,6 +228,8 @@ router.post('/:id/start', authMiddleware, async (ctx) => {
     where: { examId_userId: { examId, userId } },
   });
 
+  const isFirstEnter = !record || record.status === 'NOT_STARTED';
+
   if (!record) {
     record = await prisma.examRecord.create({
       data: {
@@ -234,17 +238,34 @@ router.post('/:id/start', authMiddleware, async (ctx) => {
         status: 'IN_PROGRESS',
         startTime: now,
         answers: {},
+        enterCount: 1,
       },
     });
   } else if (record.status === 'NOT_STARTED') {
     record = await prisma.examRecord.update({
       where: { id: record.id },
-      data: { status: 'IN_PROGRESS', startTime: now },
+      data: { status: 'IN_PROGRESS', startTime: now, enterCount: 1 },
     });
   } else if (record.status === 'SUBMITTED' || record.status === 'GRADED') {
     badRequest(ctx, '您已提交过该考试');
     return;
+  } else if (record.status === 'IN_PROGRESS') {
+    record = await prisma.examRecord.update({
+      where: { id: record.id },
+      data: { enterCount: { increment: 1 } },
+    });
   }
+
+  await prisma.examSession.create({
+    data: {
+      examId,
+      userId,
+      examRecordId: record.id,
+      enterTime: now,
+      ipAddress,
+      userAgent,
+    },
+  });
 
   success(ctx, record);
 });
@@ -256,6 +277,7 @@ router.post('/:id/submit', authMiddleware, async (ctx) => {
 
   const record = await prisma.examRecord.findUnique({
     where: { examId_userId: { examId, userId } },
+    include: { sessions: { orderBy: { enterTime: 'desc' }, take: 1 } },
   });
 
   if (!record) {
@@ -289,14 +311,31 @@ router.post('/:id/submit', authMiddleware, async (ctx) => {
     wrongItems = getWrongQuestions(exam.paper.items as any, answers);
   }
 
+  const now = new Date();
+  let totalActiveTime = record.totalActiveTime || 0;
+
+  const lastSession = record.sessions && record.sessions.length > 0 ? record.sessions[0] : null;
+  if (lastSession && !lastSession.exitTime) {
+    const sessionDuration = Math.floor((now.getTime() - lastSession.enterTime.getTime()) / 1000);
+    totalActiveTime += sessionDuration;
+  }
+
   const updatedRecord = await prisma.$transaction(async (tx) => {
+    if (lastSession && !lastSession.exitTime) {
+      await tx.examSession.update({
+        where: { id: lastSession.id },
+        data: { exitTime: now },
+      });
+    }
+
     const recordUpdate = await tx.examRecord.update({
       where: { id: record.id },
       data: {
         status: 'SUBMITTED',
-        submitTime: new Date(),
+        submitTime: now,
         totalScore,
         answers: answers || {},
+        totalActiveTime,
       },
     });
 
@@ -389,6 +428,291 @@ router.get('/:id/records', authMiddleware, roleMiddleware('ADMIN', 'TEACHER'), a
   });
 
   success(ctx, records);
+});
+
+router.post('/:id/exit', authMiddleware, async (ctx) => {
+  const examId = Number(ctx.params.id);
+  const userId = ctx.state.user.id;
+
+  const record = await prisma.examRecord.findUnique({
+    where: { examId_userId: { examId, userId } },
+    include: { sessions: { orderBy: { enterTime: 'desc' }, take: 1 } },
+  });
+
+  if (!record) {
+    notFound(ctx, '考试记录');
+    return;
+  }
+
+  if (record.status !== 'IN_PROGRESS') {
+    badRequest(ctx, '考试未进行中');
+    return;
+  }
+
+  const now = new Date();
+  let totalActiveTime = record.totalActiveTime || 0;
+
+  const lastSession = record.sessions && record.sessions.length > 0 ? record.sessions[0] : null;
+  if (lastSession && !lastSession.exitTime) {
+    const sessionDuration = Math.floor((now.getTime() - lastSession.enterTime.getTime()) / 1000);
+    totalActiveTime += sessionDuration;
+
+    await prisma.$transaction(async (tx) => {
+      await tx.examSession.update({
+        where: { id: lastSession.id },
+        data: { exitTime: now },
+      });
+
+      await tx.examRecord.update({
+        where: { id: record.id },
+        data: { totalActiveTime },
+      });
+    });
+  }
+
+  success(ctx, { message: '退出成功', totalActiveTime });
+});
+
+router.post('/:id/heartbeat', authMiddleware, async (ctx) => {
+  const examId = Number(ctx.params.id);
+  const userId = ctx.state.user.id;
+
+  const record = await prisma.examRecord.findUnique({
+    where: { examId_userId: { examId, userId } },
+  });
+
+  if (!record || record.status !== 'IN_PROGRESS') {
+    badRequest(ctx, '考试未进行中');
+    return;
+  }
+
+  success(ctx, { status: 'ok', timestamp: new Date().toISOString() });
+});
+
+function formatDuration(seconds: number): string {
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const secs = seconds % 60;
+  if (hours > 0) {
+    return `${hours}小时${minutes}分${secs}秒`;
+  }
+  if (minutes > 0) {
+    return `${minutes}分${secs}秒`;
+  }
+  return `${secs}秒`;
+}
+
+function calculateAbnormalStatus(
+  record: any,
+  examDurationMinutes: number
+): { isAbnormal: boolean; reasons: string[] } {
+  const reasons: string[] = [];
+  const examDurationSeconds = examDurationMinutes * 60;
+
+  if (record.enterCount && record.enterCount > 3) {
+    reasons.push(`进入考试${record.enterCount}次，超过正常范围`);
+  }
+
+  if (record.totalActiveTime && record.totalActiveTime > 0) {
+    if (record.totalActiveTime > examDurationSeconds * 1.2) {
+      reasons.push('答题用时明显超过考试规定时长');
+    }
+    if (record.totalActiveTime < examDurationSeconds * 0.2 && record.status === 'SUBMITTED') {
+      reasons.push('答题用时明显过短，可能存在异常');
+    }
+  }
+
+  if (record.status === 'IN_PROGRESS' && record.startTime) {
+    const now = new Date();
+    const elapsed = Math.floor((now.getTime() - new Date(record.startTime).getTime()) / 1000);
+    if (elapsed > examDurationSeconds * 1.5) {
+      reasons.push('考试进行时间远超规定时长');
+    }
+  }
+
+  return {
+    isAbnormal: reasons.length > 0,
+    reasons,
+  };
+}
+
+router.get('/:id/monitor', authMiddleware, roleMiddleware('ADMIN', 'TEACHER'), async (ctx) => {
+  const examId = Number(ctx.params.id);
+
+  const exam = await prisma.exam.findUnique({
+    where: { id: examId },
+    include: { paper: { select: { id: true, title: true, duration: true, totalScore: true } } },
+  });
+
+  if (!exam) {
+    notFound(ctx, '考试');
+    return;
+  }
+
+  const examDuration = exam.paper?.duration || 0;
+
+  const records = await prisma.examRecord.findMany({
+    where: { examId },
+    include: {
+      user: { select: { id: true, username: true, name: true } },
+      sessions: {
+        orderBy: { enterTime: 'asc' },
+        select: {
+          id: true,
+          enterTime: true,
+          exitTime: true,
+          ipAddress: true,
+        },
+      },
+    },
+    orderBy: { id: 'asc' },
+  });
+
+  const monitorList = records.map((record: any) => {
+    const sessionsWithDuration = record.sessions.map((session: any) => {
+      const endTime = session.exitTime ? new Date(session.exitTime) : new Date();
+      const duration = Math.floor((endTime.getTime() - new Date(session.enterTime).getTime()) / 1000);
+      return {
+        id: session.id,
+        enterTime: session.enterTime,
+        exitTime: session.exitTime,
+        ipAddress: session.ipAddress,
+        duration,
+      };
+    });
+
+    const { isAbnormal, reasons } = calculateAbnormalStatus(record, examDuration);
+
+    return {
+      id: record.id,
+      userId: record.userId,
+      username: record.user.username,
+      name: record.user.name,
+      status: record.status,
+      startTime: record.startTime,
+      submitTime: record.submitTime,
+      enterCount: record.enterCount || 0,
+      totalActiveTime: record.totalActiveTime || 0,
+      totalActiveTimeFormatted: formatDuration(record.totalActiveTime || 0),
+      examDuration,
+      isAbnormal,
+      abnormalReasons: reasons,
+      sessions: sessionsWithDuration,
+    };
+  });
+
+  const stats = {
+    totalStudents: records.length,
+    inProgressCount: records.filter((r: any) => r.status === 'IN_PROGRESS').length,
+    submittedCount: records.filter((r: any) => r.status === 'SUBMITTED' || r.status === 'GRADED').length,
+    notStartedCount: records.filter((r: any) => r.status === 'NOT_STARTED').length,
+    abnormalCount: monitorList.filter((m: any) => m.isAbnormal).length,
+  };
+
+  success(ctx, {
+    exam: {
+      id: exam.id,
+      title: exam.title,
+      startTime: exam.startTime,
+      endTime: exam.endTime,
+      status: exam.status,
+      paper: exam.paper,
+    },
+    stats,
+    list: monitorList,
+  });
+});
+
+router.get('/:id/monitor/export', authMiddleware, roleMiddleware('ADMIN', 'TEACHER'), async (ctx) => {
+  const examId = Number(ctx.params.id);
+
+  const exam = await prisma.exam.findUnique({
+    where: { id: examId },
+    include: { paper: { select: { id: true, title: true, duration: true } } },
+  });
+
+  if (!exam) {
+    notFound(ctx, '考试');
+    return;
+  }
+
+  const examDuration = exam.paper?.duration || 0;
+
+  const records = await prisma.examRecord.findMany({
+    where: { examId },
+    include: {
+      user: { select: { id: true, username: true, name: true } },
+      sessions: {
+        orderBy: { enterTime: 'asc' },
+        select: {
+          id: true,
+          enterTime: true,
+          exitTime: true,
+          ipAddress: true,
+        },
+      },
+    },
+    orderBy: { id: 'asc' },
+  });
+
+  const headers = [
+    '学生姓名',
+    '学号/用户名',
+    '考试状态',
+    '进入次数',
+    '开始答题时间',
+    '提交时间',
+    '累计答题用时',
+    '考试规定时长(分钟)',
+    '是否异常',
+    '异常原因',
+    '各次进入时间',
+    '各次退出时间',
+    '各次IP地址',
+  ];
+
+  const statusMap: Record<string, string> = {
+    NOT_STARTED: '未开始',
+    IN_PROGRESS: '进行中',
+    SUBMITTED: '已提交',
+    GRADED: '已批改',
+  };
+
+  const rows = records.map((record: any) => {
+    const { isAbnormal, reasons } = calculateAbnormalStatus(record, examDuration);
+    const sessions = record.sessions || [];
+
+    const enterTimes = sessions.map((s: any) => s.enterTime ? new Date(s.enterTime).toLocaleString('zh-CN') : '').join('; ');
+    const exitTimes = sessions.map((s: any) => s.exitTime ? new Date(s.exitTime).toLocaleString('zh-CN') : '进行中').join('; ');
+    const ipAddresses = sessions.map((s: any) => s.ipAddress || '未知').join('; ');
+
+    return [
+      record.user.name,
+      record.user.username,
+      statusMap[record.status] || record.status,
+      String(record.enterCount || 0),
+      record.startTime ? new Date(record.startTime).toLocaleString('zh-CN') : '',
+      record.submitTime ? new Date(record.submitTime).toLocaleString('zh-CN') : '',
+      formatDuration(record.totalActiveTime || 0),
+      String(examDuration),
+      isAbnormal ? '是' : '否',
+      reasons.join('; '),
+      enterTimes,
+      exitTimes,
+      ipAddresses,
+    ];
+  });
+
+  const csvContent = [headers, ...rows]
+    .map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(','))
+    .join('\n');
+
+  const bom = '\uFEFF';
+  const fileName = `考试监控报告_${exam.title}_${new Date().toLocaleDateString('zh-CN').replace(/\//g, '-')}.csv`;
+
+  ctx.set('Content-Type', 'text/csv; charset=utf-8');
+  ctx.set('Content-Disposition', `attachment; filename="${encodeURIComponent(fileName)}"`);
+  ctx.body = bom + csvContent;
 });
 
 export default router;
