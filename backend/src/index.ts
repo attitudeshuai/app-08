@@ -11,6 +11,7 @@ import userRoutes from './routes/users';
 import questionRoutes from './routes/questions';
 import paperRoutes from './routes/papers';
 import examRoutes from './routes/exams';
+import wrongQuestionRoutes from './routes/wrongQuestions';
 
 const app = new Koa();
 const PORT = config.port;
@@ -82,6 +83,8 @@ async function bootstrap(): Promise<void> {
   app.use(paperRoutes.allowedMethods());
   app.use(examRoutes.routes());
   app.use(examRoutes.allowedMethods());
+  app.use(wrongQuestionRoutes.routes());
+  app.use(wrongQuestionRoutes.allowedMethods());
 
   app.listen(PORT, () => {
     console.log(`Server is running on http://localhost:${PORT}`);

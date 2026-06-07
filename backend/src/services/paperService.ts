@@ -120,31 +120,75 @@ export function calculateExamScore(
     const userAnswer = answers ? answers[item.questionId] : undefined;
     if (userAnswer !== undefined && userAnswer !== null && userAnswer !== '') {
       const correctAnswer = item.question.answer;
-      if (
-        item.question.type === 'SINGLE_CHOICE' ||
-        item.question.type === 'TRUE_FALSE' ||
-        item.question.type === 'FILL_BLANK'
-      ) {
-        if (String(userAnswer).trim().toLowerCase() === String(correctAnswer).trim().toLowerCase()) {
-          totalScore += item.score;
-        }
-      } else if (item.question.type === 'MULTIPLE_CHOICE') {
-        const userSorted = String(userAnswer)
-          .split(',')
-          .map((s) => s.trim())
-          .sort()
-          .join(',');
-        const correctSorted = String(correctAnswer)
-          .split(',')
-          .map((s) => s.trim())
-          .sort()
-          .join(',');
-        if (userSorted === correctSorted) {
-          totalScore += item.score;
-        }
+      if (isAnswerCorrect(item.question.type, userAnswer, correctAnswer)) {
+        totalScore += item.score;
       }
     }
   }
 
   return totalScore;
+}
+
+export function isAnswerCorrect(
+  questionType: string,
+  userAnswer: string,
+  correctAnswer: string,
+): boolean {
+  if (
+    questionType === 'SINGLE_CHOICE' ||
+    questionType === 'TRUE_FALSE' ||
+    questionType === 'FILL_BLANK'
+  ) {
+    return String(userAnswer).trim().toLowerCase() === String(correctAnswer).trim().toLowerCase();
+  } else if (questionType === 'MULTIPLE_CHOICE') {
+    const userSorted = String(userAnswer)
+      .split(',')
+      .map((s) => s.trim())
+      .sort()
+      .join(',');
+    const correctSorted = String(correctAnswer)
+      .split(',')
+      .map((s) => s.trim())
+      .sort()
+      .join(',');
+    return userSorted === correctSorted;
+  }
+  return false;
+}
+
+export interface WrongQuestionItem {
+  questionId: number;
+  userAnswer: string | undefined;
+  correctAnswer: string;
+  subject: string;
+}
+
+export function getWrongQuestions(
+  paperItems: Array<{
+    id: number;
+    questionId: number;
+    score: number;
+    question: { id: number; type: string; answer: string; subject: string };
+  }>,
+  answers: Record<number, string> | undefined,
+): WrongQuestionItem[] {
+  const wrongItems: WrongQuestionItem[] = [];
+
+  for (const item of paperItems) {
+    const userAnswer = answers ? answers[item.questionId] : undefined;
+    const isCorrect = userAnswer !== undefined && userAnswer !== null && userAnswer !== ''
+      ? isAnswerCorrect(item.question.type, userAnswer, item.question.answer)
+      : false;
+
+    if (!isCorrect) {
+      wrongItems.push({
+        questionId: item.questionId,
+        userAnswer: userAnswer,
+        correctAnswer: item.question.answer,
+        subject: item.question.subject,
+      });
+    }
+  }
+
+  return wrongItems;
 }

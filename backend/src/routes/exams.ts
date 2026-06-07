@@ -3,7 +3,7 @@ import prisma from '../lib/prisma';
 import { authMiddleware, roleMiddleware } from '../middleware/auth';
 import { success, badRequest, notFound } from '../utils/response';
 import { getPaginationParams, buildPaginatedResult } from '../utils/pagination';
-import { calculateExamScore } from '../services/paperService';
+import { calculateExamScore, getWrongQuestions } from '../services/paperService';
 import { ExamStatus, ExamRecordStatus } from '../types';
 
 const router = new Router({ prefix: '/api/exams' });
@@ -283,18 +283,39 @@ router.post('/:id/submit', authMiddleware, async (ctx) => {
   });
 
   let totalScore = 0;
+  let wrongItems: any[] = [];
   if (exam && exam.paper && exam.paper.items) {
     totalScore = calculateExamScore(exam.paper.items as any, answers);
+    wrongItems = getWrongQuestions(exam.paper.items as any, answers);
   }
 
-  const updatedRecord = await prisma.examRecord.update({
-    where: { id: record.id },
-    data: {
-      status: 'SUBMITTED',
-      submitTime: new Date(),
-      totalScore,
-      answers: answers || {},
-    },
+  const updatedRecord = await prisma.$transaction(async (tx) => {
+    const recordUpdate = await tx.examRecord.update({
+      where: { id: record.id },
+      data: {
+        status: 'SUBMITTED',
+        submitTime: new Date(),
+        totalScore,
+        answers: answers || {},
+      },
+    });
+
+    if (wrongItems.length > 0) {
+      const wrongQuestionData = wrongItems.map((item) => ({
+        userId,
+        questionId: item.questionId,
+        examId,
+        examRecordId: record.id,
+        userAnswer: item.userAnswer || null,
+        correctAnswer: item.correctAnswer,
+        subject: item.subject,
+      }));
+      await tx.wrongQuestion.createMany({
+        data: wrongQuestionData,
+      });
+    }
+
+    return recordUpdate;
   });
 
   success(ctx, updatedRecord);

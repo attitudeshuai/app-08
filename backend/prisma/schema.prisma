@@ -16,10 +16,11 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  questions    Question[]
-  papers       Paper[]
-  exams        Exam[]
-  examRecords  ExamRecord[]
+  questions      Question[]
+  papers         Paper[]
+  exams          Exam[]
+  examRecords    ExamRecord[]
+  wrongQuestions WrongQuestion[]
 }
 
 model Question {
@@ -38,7 +39,8 @@ model Question {
   createdBy Int  @map("createdById")
   user      User @relation(fields: [createdBy], references: [id])
 
-  paperItems PaperItem[]
+  paperItems     PaperItem[]
+  wrongQuestions WrongQuestion[]
 }
 
 model Paper {
@@ -85,7 +87,8 @@ model Exam {
   createdBy  Int    @map("createdById")
   user       User   @relation(fields: [createdBy], references: [id])
 
-  examRecords ExamRecord[]
+  examRecords    ExamRecord[]
+  wrongQuestions WrongQuestion[]
 }
 
 model ExamRecord {
@@ -103,7 +106,31 @@ model ExamRecord {
   userId Int  @map("userId")
   user   User @relation(fields: [userId], references: [id])
 
+  wrongQuestions WrongQuestion[]
+
   @@unique([examId, userId])
   @@index([examId])
   @@index([userId])
+}
+
+model WrongQuestion {
+  id            Int      @id @default(autoincrement())
+  userAnswer    String?
+  correctAnswer String
+  subject       String
+  createdAt     DateTime @default(now())
+
+  userId        Int        @map("userId")
+  user          User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  questionId    Int        @map("questionId")
+  question      Question   @relation(fields: [questionId], references: [id])
+  examId        Int        @map("examId")
+  exam          Exam       @relation(fields: [examId], references: [id], onDelete: Cascade)
+  examRecordId  Int        @map("examRecordId")
+  examRecord    ExamRecord @relation(fields: [examRecordId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([questionId])
+  @@index([examId])
+  @@index([subject])
 }
