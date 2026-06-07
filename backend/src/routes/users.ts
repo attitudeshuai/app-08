@@ -6,8 +6,32 @@ import { success, badRequest, notFound } from '../utils/response';
 import { getPaginationParams, buildPaginatedResult } from '../utils/pagination';
 import { config } from '../config';
 import { UserRole } from '../types';
+import { getLearningOverview } from '../services/learningStatsService';
 
 const router = new Router({ prefix: '/api/users' });
+
+router.get('/me', authMiddleware, async (ctx) => {
+  const userId = ctx.state.user.id;
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { id: true, username: true, role: true, name: true, createdAt: true, updatedAt: true },
+  });
+
+  if (!user) {
+    notFound(ctx, '用户');
+    return;
+  }
+
+  success(ctx, user);
+});
+
+router.get('/me/learning-overview', authMiddleware, async (ctx) => {
+  const userId = ctx.state.user.id;
+  const days = ctx.query.days ? Number(ctx.query.days) : undefined;
+
+  const overview = await getLearningOverview(userId, days);
+  success(ctx, overview);
+});
 
 router.get('/', authMiddleware, roleMiddleware('ADMIN', 'TEACHER'), async (ctx) => {
   const { page, pageSize, skip, take } = getPaginationParams(ctx.query);

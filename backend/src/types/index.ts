@@ -267,3 +267,63 @@ export interface QuestionDiff {
 export interface QuestionHistoryDetail extends QuestionHistoryItem {
   diff?: QuestionDiff[];
 }
+
+export interface LearningOverview {
+  overview: LearningOverviewStats;
+  recentStats: RecentLearningStats;
+  scoreTrend: ScoreTrendItem[];
+  subjectStats: SubjectLearningStat[];
+  wrongQuestionStats: WrongQuestionStat;
+  activityCalendar: ActivityCalendarItem[];
+}
+
+export interface LearningOverviewStats {
+  totalExamsTaken: number;
+  totalQuestionsAnswered: number;
+  totalWrongQuestions: number;
+  totalStudyTime: number;
+  avgScore: number;
+  accuracyRate: number;
+  passRate: number;
+}
+
+export interface RecentLearningStats {
+  days: number;
+  examsTaken: number;
+  questionsAnswered: number;
+  studyTime: number;
+  avgScore: number;
+  wrongQuestions: number;
+}
+
+export interface ScoreTrendItem {
+  examId: number;
+  examTitle: string;
+  score: number;
+  totalScore: number;
+  scoreRate: number;
+  submitTime: Date;
+}
+
+export interface SubjectLearningStat {
+  subject: string;
+  examsTaken: number;
+  questionsAnswered: number;
+  wrongQuestionCount: number;
+  avgScore: number;
+  accuracyRate: number;
+}
+
+export interface WrongQuestionStat {
+  totalCount: number;
+  bySubject: { subject: string; count: number }[];
+  byDifficulty: { difficulty: string; count: number }[];
+}
+
+export interface ActivityCalendarItem {
+  date: string;
+  hasActivity: boolean;
+  examCount: number;
+  questionCount: number;
+  studyTime: number;
+}
