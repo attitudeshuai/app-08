@@ -187,6 +187,10 @@ export async function autoSubmitExam(examId: number, userId: number): Promise<an
     throw new Error('考试不存在');
   }
 
+  if (exam.status !== 'PUBLISHED') {
+    throw new Error('考试未发布，无法交卷');
+  }
+
   const now = new Date();
   if (now < exam.endTime) {
     throw new Error('考试尚未结束，无法自动交卷');
