@@ -29,6 +29,14 @@ export type ExamRecordStatus = 'NOT_STARTED' | 'IN_PROGRESS' | 'SUBMITTED' | 'GR
 
 export type ExamSessionStatus = 'ACTIVE' | 'ENDED' | 'ABANDONED';
 
+export type NotificationType =
+  | 'SYSTEM'
+  | 'EXAM_REMINDER_24H'
+  | 'EXAM_REMINDER_1H'
+  | 'EXAM_REMINDER_15M'
+  | 'EXAM_START'
+  | 'EXAM_RESULT';
+
 export interface RemainingTime {
   totalSeconds: number;
   hours: number;
@@ -180,4 +188,51 @@ export interface ExamStatistics {
   typeStats: DimensionStatItem[];
   difficultyStats: DimensionStatItem[];
   subjectStats: DimensionStatItem[];
+}
+
+export interface ExamReservation {
+  id: number;
+  examId: number;
+  userId: number;
+  createdAt: Date;
+  updatedAt: Date;
+  exam?: {
+    id: number;
+    title: string;
+    startTime: Date;
+    endTime: Date;
+    status: string;
+    paper?: {
+      id: number;
+      title: string;
+      duration: number;
+      totalScore: number;
+    };
+  };
+}
+
+export interface Notification {
+  id: number;
+  title: string;
+  content: string;
+  type: string;
+  isRead: boolean;
+  relatedId: number | null;
+  createdAt: Date;
+  userId: number;
+}
+
+export interface ExamWithReservation {
+  id: number;
+  title: string;
+  startTime: Date;
+  endTime: Date;
+  status: string;
+  autoSubmit: boolean;
+  paperId: number;
+  createdBy: number;
+  createdAt: Date;
+  updatedAt: Date;
+  reservationCount?: number;
+  isReserved?: boolean;
 }

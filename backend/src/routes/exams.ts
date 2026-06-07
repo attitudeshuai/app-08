@@ -40,6 +40,9 @@ router.get('/', authMiddleware, async (ctx) => {
       include: {
         paper: { select: { id: true, title: true, totalScore: true, duration: true } },
         user: { select: { id: true, name: true } },
+        _count: {
+          select: { examReservations: true },
+        },
       },
       skip,
       take,
@@ -47,11 +50,29 @@ router.get('/', authMiddleware, async (ctx) => {
     }),
   ]);
 
+  const examIds = list.map((exam: any) => exam.id);
+  let userReservations: number[] = [];
+  if (user.role === 'STUDENT' && examIds.length > 0) {
+    const reservations = await prisma.examReservation.findMany({
+      where: {
+        userId: user.id,
+        examId: { in: examIds },
+      },
+      select: { examId: true },
+    });
+    userReservations = reservations.map((r: any) => r.examId);
+  }
+
   const listWithRemaining = list.map((exam: any) => {
     const remaining = calculateRemainingTime(exam.endTime);
+    const reservationCount = exam._count?.examReservations || 0;
+    const isReserved = userReservations.includes(exam.id);
+    const { _count, ...rest } = exam;
     return {
-      ...exam,
+      ...rest,
       remainingTime: remaining,
+      reservationCount,
+      isReserved,
     };
   });
 
@@ -60,6 +81,7 @@ router.get('/', authMiddleware, async (ctx) => {
 
 router.get('/:id', authMiddleware, async (ctx) => {
   const id = Number(ctx.params.id);
+  const user = ctx.state.user;
   const exam = await prisma.exam.findUnique({
     where: { id },
     include: {
@@ -72,6 +94,9 @@ router.get('/:id', authMiddleware, async (ctx) => {
         },
       },
       user: { select: { id: true, name: true } },
+      _count: {
+        select: { examReservations: true },
+      },
     },
   });
 
@@ -80,7 +105,6 @@ router.get('/:id', authMiddleware, async (ctx) => {
     return;
   }
 
-  const user = ctx.state.user;
   if (user.role === 'STUDENT') {
     if (exam.paper && exam.paper.items) {
       (exam.paper.items as any) = exam.paper.items.map((item: any) => {
@@ -95,7 +119,22 @@ router.get('/:id', authMiddleware, async (ctx) => {
   }
 
   const remainingTime = calculateRemainingTime(exam.endTime);
-  const result: any = { ...exam, remainingTime };
+  const reservationCount = (exam as any)._count?.examReservations || 0;
+  let isReserved = false;
+  if (user.role === 'STUDENT') {
+    const userReservation = await prisma.examReservation.findUnique({
+      where: { examId_userId: { examId: id, userId: user.id } },
+    });
+    isReserved = !!userReservation;
+  }
+
+  const { _count, ...examRest } = exam as any;
+  const result: any = {
+    ...examRest,
+    remainingTime,
+    reservationCount,
+    isReserved,
+  };
 
   success(ctx, result);
 });
@@ -630,11 +669,15 @@ router.get('/:id/monitor', authMiddleware, roleMiddleware('ADMIN', 'TEACHER'), a
 
   const stats = {
     totalStudents: records.length,
+    reservationCount: 0,
     inProgressCount: records.filter((r: any) => r.status === 'IN_PROGRESS').length,
     submittedCount: records.filter((r: any) => r.status === 'SUBMITTED' || r.status === 'GRADED').length,
     notStartedCount: records.filter((r: any) => r.status === 'NOT_STARTED').length,
     abnormalCount: monitorList.filter((m: any) => m.isAbnormal).length,
   };
+
+  const reservationCount = await prisma.examReservation.count({ where: { examId } });
+  stats.reservationCount = reservationCount;
 
   success(ctx, {
     exam: {
@@ -689,6 +732,8 @@ router.get('/:id/statistics', authMiddleware, roleMiddleware('ADMIN', 'TEACHER')
   const totalStudents = records.length;
   const submittedCount = submittedRecords.length;
   const submittedRate = totalStudents > 0 ? submittedCount / totalStudents : 0;
+
+  const reservationCount = await prisma.examReservation.count({ where: { examId } });
 
   let avgScore = 0;
   let highestScore = 0;
@@ -745,6 +790,7 @@ router.get('/:id/statistics', authMiddleware, roleMiddleware('ADMIN', 'TEACHER')
     },
     overview: {
       totalStudents,
+      reservationCount,
       submittedCount,
       submittedRate: roundToTwo(submittedRate),
       avgScore: roundToTwo(avgScore),

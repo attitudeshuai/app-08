@@ -16,13 +16,15 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  questions      Question[]
-  papers         Paper[]
-  paperTemplates PaperTemplate[]
-  exams          Exam[]
-  examRecords    ExamRecord[]
-  examSessions   ExamSession[]
-  wrongQuestions WrongQuestion[]
+  questions        Question[]
+  papers           Paper[]
+  paperTemplates   PaperTemplate[]
+  exams            Exam[]
+  examRecords      ExamRecord[]
+  examSessions     ExamSession[]
+  wrongQuestions   WrongQuestion[]
+  examReservations ExamReservation[]
+  notifications    Notification[]
 }
 
 model Question {
@@ -122,9 +124,10 @@ model Exam {
   createdBy  Int    @map("createdById")
   user       User   @relation(fields: [createdBy], references: [id])
 
-  examRecords    ExamRecord[]
-  examSessions   ExamSession[]
-  wrongQuestions WrongQuestion[]
+  examRecords      ExamRecord[]
+  examSessions     ExamSession[]
+  wrongQuestions   WrongQuestion[]
+  examReservations ExamReservation[]
 }
 
 model ExamRecord {
@@ -194,4 +197,36 @@ model WrongQuestion {
   @@index([questionId])
   @@index([examId])
   @@index([subject])
+}
+
+model ExamReservation {
+  id        Int      @id @default(autoincrement())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  examId Int  @map("examId")
+  exam   Exam @relation(fields: [examId], references: [id], onDelete: Cascade)
+  userId Int  @map("userId")
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([examId, userId])
+  @@index([examId])
+  @@index([userId])
+}
+
+model Notification {
+  id        Int      @id @default(autoincrement())
+  title     String
+  content   String
+  type      String   @default("SYSTEM")
+  isRead    Boolean  @default(false)
+  relatedId Int?
+  createdAt DateTime @default(now())
+
+  userId Int  @map("userId")
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([isRead])
+  @@index([type])
 }

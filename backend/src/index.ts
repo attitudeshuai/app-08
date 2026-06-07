@@ -13,7 +13,10 @@ import paperRoutes from './routes/papers';
 import paperTemplateRoutes from './routes/paperTemplates';
 import examRoutes from './routes/exams';
 import wrongQuestionRoutes from './routes/wrongQuestions';
+import examReservationRoutes from './routes/examReservations';
+import notificationRoutes from './routes/notifications';
 import { startAutoSubmitService, stopAutoSubmitService } from './services/autoSubmitService';
+import { startExamReminderService, stopExamReminderService } from './services/examReminderService';
 
 const app = new Koa();
 const PORT = config.port;
@@ -89,12 +92,17 @@ async function bootstrap(): Promise<void> {
   app.use(examRoutes.allowedMethods());
   app.use(wrongQuestionRoutes.routes());
   app.use(wrongQuestionRoutes.allowedMethods());
+  app.use(examReservationRoutes.routes());
+  app.use(examReservationRoutes.allowedMethods());
+  app.use(notificationRoutes.routes());
+  app.use(notificationRoutes.allowedMethods());
 
   app.listen(PORT, () => {
     console.log(`Server is running on http://localhost:${PORT}`);
     console.log(`Environment: ${config.nodeEnv}`);
     console.log(`Health check: http://localhost:${PORT}/api/health`);
     startAutoSubmitService();
+    startExamReminderService();
   });
 }
 
@@ -106,6 +114,7 @@ bootstrap().catch((err) => {
 process.on('SIGINT', async () => {
   console.log('\nShutting down gracefully...');
   stopAutoSubmitService();
+  stopExamReminderService();
   await prisma.$disconnect();
   process.exit(0);
 });
@@ -113,6 +122,7 @@ process.on('SIGINT', async () => {
 process.on('SIGTERM', async () => {
   console.log('\nShutting down gracefully...');
   stopAutoSubmitService();
+  stopExamReminderService();
   await prisma.$disconnect();
   process.exit(0);
 });
