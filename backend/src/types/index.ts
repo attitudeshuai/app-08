@@ -71,3 +71,71 @@ export interface LoginResponse {
   token: string;
   user: UserResponse;
 }
+
+export interface ScoreDistributionItem {
+  range: string;
+  min: number;
+  max: number;
+  count: number;
+  percentage: number;
+}
+
+export interface QuestionStatItem {
+  questionId: number;
+  sortOrder: number;
+  type: string;
+  content: string;
+  score: number;
+  difficulty: string;
+  subject: string;
+  correctCount: number;
+  wrongCount: number;
+  unansweredCount: number;
+  accuracyRate: number;
+  avgScore: number;
+  scoreRate: number;
+}
+
+export interface DimensionStatItem {
+  name: string;
+  questionCount: number;
+  totalScore: number;
+  correctCount: number;
+  accuracyRate: number;
+  avgScore: number;
+  scoreRate: number;
+}
+
+export interface ExamStatistics {
+  exam: {
+    id: number;
+    title: string;
+    startTime: Date;
+    endTime: Date;
+    status: string;
+    paper: {
+      id: number;
+      title: string;
+      totalScore: number;
+      duration: number;
+      totalQuestions: number;
+    };
+  };
+  overview: {
+    totalStudents: number;
+    submittedCount: number;
+    submittedRate: number;
+    avgScore: number;
+    highestScore: number;
+    lowestScore: number;
+    medianScore: number;
+    passRate: number;
+    passScore: number;
+    standardDeviation: number;
+  };
+  scoreDistribution: ScoreDistributionItem[];
+  questionStats: QuestionStatItem[];
+  typeStats: DimensionStatItem[];
+  difficultyStats: DimensionStatItem[];
+  subjectStats: DimensionStatItem[];
+}

@@ -623,6 +623,302 @@ router.get('/:id/monitor', authMiddleware, roleMiddleware('ADMIN', 'TEACHER'), a
   });
 });
 
+router.get('/:id/statistics', authMiddleware, roleMiddleware('ADMIN', 'TEACHER'), async (ctx) => {
+  const examId = Number(ctx.params.id);
+
+  const exam = await prisma.exam.findUnique({
+    where: { id: examId },
+    include: {
+      paper: {
+        include: {
+          items: {
+            include: { question: true },
+            orderBy: { sortOrder: 'asc' },
+          },
+        },
+      },
+    },
+  });
+
+  if (!exam) {
+    notFound(ctx, '考试');
+    return;
+  }
+
+  const records = await prisma.examRecord.findMany({
+    where: { examId },
+    include: { user: { select: { id: true, name: true, username: true } } },
+    orderBy: { totalScore: 'desc' },
+  });
+
+  const submittedRecords = records.filter(
+    (r: any) => r.status === 'SUBMITTED' || r.status === 'GRADED'
+  );
+
+  const scores = submittedRecords
+    .map((r: any) => r.totalScore ?? 0)
+    .sort((a: number, b: number) => a - b);
+
+  const totalStudents = records.length;
+  const submittedCount = submittedRecords.length;
+  const submittedRate = totalStudents > 0 ? submittedCount / totalStudents : 0;
+
+  let avgScore = 0;
+  let highestScore = 0;
+  let lowestScore = 0;
+  let medianScore = 0;
+  let standardDeviation = 0;
+  const passScore = exam.paper?.totalScore ? exam.paper.totalScore * 0.6 : 60;
+  let passCount = 0;
+
+  if (scores.length > 0) {
+    avgScore = scores.reduce((sum: number, s: number) => sum + s, 0) / scores.length;
+    highestScore = scores[scores.length - 1];
+    lowestScore = scores[0];
+    passCount = scores.filter((s: number) => s >= passScore).length;
+
+    const mid = Math.floor(scores.length / 2);
+    medianScore = scores.length % 2 !== 0
+      ? scores[mid]
+      : (scores[mid - 1] + scores[mid]) / 2;
+
+    const variance = scores.reduce((sum: number, s: number) => {
+      return sum + Math.pow(s - avgScore, 2);
+    }, 0) / scores.length;
+    standardDeviation = Math.sqrt(variance);
+  }
+
+  const totalScore = exam.paper?.totalScore || 100;
+  const scoreRanges = buildScoreRanges(totalScore);
+  const scoreDistribution = calculateScoreDistribution(scores, scoreRanges);
+
+  const questionStats = calculateQuestionStats(
+    exam.paper?.items || [],
+    submittedRecords as any[]
+  );
+
+  const typeStats = calculateDimensionStats(questionStats, 'type');
+  const difficultyStats = calculateDimensionStats(questionStats, 'difficulty');
+  const subjectStats = calculateDimensionStats(questionStats, 'subject');
+
+  const statistics: any = {
+    exam: {
+      id: exam.id,
+      title: exam.title,
+      startTime: exam.startTime,
+      endTime: exam.endTime,
+      status: exam.status,
+      paper: {
+        id: exam.paper?.id,
+        title: exam.paper?.title,
+        totalScore: exam.paper?.totalScore,
+        duration: exam.paper?.duration,
+        totalQuestions: exam.paper?.items?.length || 0,
+      },
+    },
+    overview: {
+      totalStudents,
+      submittedCount,
+      submittedRate: roundToTwo(submittedRate),
+      avgScore: roundToTwo(avgScore),
+      highestScore,
+      lowestScore,
+      medianScore: roundToTwo(medianScore),
+      passRate: roundToTwo(submittedCount > 0 ? passCount / submittedCount : 0),
+      passScore: roundToTwo(passScore),
+      standardDeviation: roundToTwo(standardDeviation),
+    },
+    scoreDistribution,
+    questionStats,
+    typeStats,
+    difficultyStats,
+    subjectStats,
+  };
+
+  success(ctx, statistics);
+});
+
+function buildScoreRanges(totalScore: number): Array<{ range: string; min: number; max: number }> {
+  const ranges: Array<{ range: string; min: number; max: number }> = [];
+  const interval = Math.ceil(totalScore / 10);
+
+  for (let i = 0; i < 10; i++) {
+    const min = i * interval;
+    const max = i === 9 ? totalScore : (i + 1) * interval - 0.01;
+    const rangeLabel = i === 9
+      ? `${Math.floor(min)}-${totalScore}`
+      : `${Math.floor(min)}-${Math.floor((i + 1) * interval - 1)}`;
+    ranges.push({ range: rangeLabel, min, max });
+  }
+
+  return ranges;
+}
+
+function calculateScoreDistribution(
+  scores: number[],
+  ranges: Array<{ range: string; min: number; max: number }>
+): Array<{ range: string; min: number; max: number; count: number; percentage: number }> {
+  const total = scores.length;
+
+  return ranges.map((r) => {
+    const count = scores.filter((s) => s >= r.min && s <= r.max).length;
+    return {
+      range: r.range,
+      min: r.min,
+      max: r.max,
+      count,
+      percentage: total > 0 ? roundToTwo(count / total) : 0,
+    };
+  });
+}
+
+function calculateQuestionStats(
+  paperItems: any[],
+  submittedRecords: any[]
+): any[] {
+  if (submittedRecords.length === 0) {
+    return paperItems.map((item: any) => ({
+      questionId: item.questionId,
+      sortOrder: item.sortOrder,
+      type: item.question.type,
+      content: item.question.content,
+      score: item.score,
+      difficulty: item.question.difficulty,
+      subject: item.question.subject,
+      correctCount: 0,
+      wrongCount: 0,
+      unansweredCount: 0,
+      accuracyRate: 0,
+      avgScore: 0,
+      scoreRate: 0,
+    }));
+  }
+
+  const totalRecords = submittedRecords.length;
+
+  return paperItems.map((item: any) => {
+    let correctCount = 0;
+    let wrongCount = 0;
+    let unansweredCount = 0;
+    let totalGotScore = 0;
+
+    for (const record of submittedRecords) {
+      const answers = record.answers as Record<number, string> | undefined;
+      const userAnswer = answers ? answers[item.questionId] : undefined;
+      const hasAnswer = userAnswer !== undefined && userAnswer !== null && userAnswer !== '';
+
+      if (!hasAnswer) {
+        unansweredCount++;
+        continue;
+      }
+
+      const isCorrect = isAnswerCorrect(item.question.type, userAnswer, item.question.answer);
+
+      if (isCorrect) {
+        correctCount++;
+        totalGotScore += item.score;
+      } else {
+        wrongCount++;
+      }
+    }
+
+    const accuracyRate = totalRecords > 0 ? roundToTwo(correctCount / totalRecords) : 0;
+    const avgScore = totalRecords > 0 ? roundToTwo(totalGotScore / totalRecords) : 0;
+    const scoreRate = item.score > 0 ? roundToTwo(avgScore / item.score) : 0;
+
+    return {
+      questionId: item.questionId,
+      sortOrder: item.sortOrder,
+      type: item.question.type,
+      content: item.question.content,
+      score: item.score,
+      difficulty: item.question.difficulty,
+      subject: item.question.subject,
+      correctCount,
+      wrongCount,
+      unansweredCount,
+      accuracyRate,
+      avgScore,
+      scoreRate,
+    };
+  });
+}
+
+function roundToTwo(num: number): number {
+  return Math.round(num * 100) / 100;
+}
+
+function calculateDimensionStats(
+  questionStats: any[],
+  dimension: 'type' | 'difficulty' | 'subject'
+): any[] {
+  const groups: Record<string, any[]> = {};
+
+  for (const qs of questionStats) {
+    const key = String(qs[dimension]);
+    if (!groups[key]) {
+      groups[key] = [];
+    }
+    groups[key].push(qs);
+  }
+
+  const result: any[] = [];
+  for (const [name, items] of Object.entries(groups)) {
+    const questionCount = items.length;
+    const totalScore = items.reduce((sum: number, item: any) => sum + item.score, 0);
+    const totalCorrectCount = items.reduce((sum: number, item: any) => sum + item.correctCount, 0);
+    const totalAvgScore = items.reduce((sum: number, item: any) => sum + item.avgScore, 0);
+    const totalRecords = items.length > 0
+      ? items[0].correctCount + items[0].wrongCount + items[0].unansweredCount
+      : 0;
+
+    const accuracyRate = totalRecords > 0 && questionCount > 0
+      ? roundToTwo(totalCorrectCount / (totalRecords * questionCount))
+      : 0;
+    const avgScore = roundToTwo(totalAvgScore);
+    const scoreRate = totalScore > 0 ? roundToTwo(avgScore / totalScore) : 0;
+
+    result.push({
+      name,
+      questionCount,
+      totalScore,
+      correctCount: totalCorrectCount,
+      accuracyRate,
+      avgScore,
+      scoreRate,
+    });
+  }
+
+  return result;
+}
+
+function isAnswerCorrect(
+  questionType: string,
+  userAnswer: string,
+  correctAnswer: string
+): boolean {
+  if (
+    questionType === 'SINGLE_CHOICE' ||
+    questionType === 'TRUE_FALSE' ||
+    questionType === 'FILL_BLANK'
+  ) {
+    return String(userAnswer).trim().toLowerCase() === String(correctAnswer).trim().toLowerCase();
+  } else if (questionType === 'MULTIPLE_CHOICE') {
+    const userSorted = String(userAnswer)
+      .split(',')
+      .map((s) => s.trim())
+      .sort()
+      .join(',');
+    const correctSorted = String(correctAnswer)
+      .split(',')
+      .map((s) => s.trim())
+      .sort()
+      .join(',');
+    return userSorted === correctSorted;
+  }
+  return false;
+}
+
 router.get('/:id/monitor/export', authMiddleware, roleMiddleware('ADMIN', 'TEACHER'), async (ctx) => {
   const examId = Number(ctx.params.id);
 
