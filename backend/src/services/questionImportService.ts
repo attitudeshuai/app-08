@@ -59,29 +59,56 @@ function parseFile(buffer: Buffer): RawQuestionData[] {
 function parseOptions(optionsStr: string): string[] | null {
   if (!optionsStr.trim()) return null;
   
-  const patterns = [
-    /[A-Z]\.\s*/,
-    /[A-Z]、\s*/,
-    /[A-Z]\)\s*/,
-    /\d+\.\s*/,
-    /\d+、\s*/,
+  const labelPatterns = [
+    /[A-Z][\.、\)]\s*/,
+    /\d+[\.、\)]\s*/,
   ];
   
-  for (const pattern of patterns) {
-    if (pattern.test(optionsStr)) {
-      const parts = optionsStr.split(pattern).filter(Boolean);
-      return parts.map(p => p.trim()).filter(Boolean);
+  const hasLabel = labelPatterns.some(pattern => pattern.test(optionsStr.trim()));
+  
+  if (hasLabel) {
+    const labelRegex = /(?:^|[\s;；])[A-Z][\.、\)]\s*|(?:^|[\s;；])\d+[\.、\)]\s*/g;
+    const matches: string[] = [];
+    let lastIndex = 0;
+    let match;
+    
+    labelRegex.lastIndex = 0;
+    while ((match = labelRegex.exec(optionsStr)) !== null) {
+      if (match.index > lastIndex) {
+        const segment = optionsStr.substring(lastIndex, match.index);
+        const cleaned = segment.replace(/^[\s;；]+/, '').replace(/[\s;；]+$/, '').trim();
+        if (cleaned) {
+          matches.push(cleaned);
+        }
+      }
+      lastIndex = labelRegex.lastIndex;
+    }
+    
+    if (lastIndex < optionsStr.length) {
+      const segment = optionsStr.substring(lastIndex);
+      const cleaned = segment.replace(/^[\s;；]+/, '').replace(/[\s;；]+$/, '').trim();
+      if (cleaned) {
+        matches.push(cleaned);
+      }
+    }
+    
+    if (matches.length > 0) {
+      return matches;
     }
   }
   
-  if (optionsStr.includes(';')) {
-    return optionsStr.split(';').map(s => s.trim()).filter(Boolean);
+  if (optionsStr.includes(';') || optionsStr.includes('；')) {
+    const parts = optionsStr
+      .replace(/；/g, ';')
+      .split(';')
+      .map(s => s.trim())
+      .filter(Boolean);
+    return parts.length > 0 ? parts : null;
   }
-  if (optionsStr.includes('；')) {
-    return optionsStr.split('；').map(s => s.trim()).filter(Boolean);
-  }
+  
   if (optionsStr.includes('\n')) {
-    return optionsStr.split('\n').map(s => s.trim()).filter(Boolean);
+    const parts = optionsStr.split('\n').map(s => s.trim()).filter(Boolean);
+    return parts.length > 0 ? parts : null;
   }
   
   return [optionsStr.trim()];
@@ -181,8 +208,42 @@ async function checkDuplicate(content: string, subject: string): Promise<boolean
       content,
       subject,
     },
+    select: { id: true },
   });
   return !!existing;
+}
+
+function levenshteinDistance(str1: string, str2: string): number {
+  const m = str1.length;
+  const n = str2.length;
+  
+  if (m === 0) return n;
+  if (n === 0) return m;
+  
+  const dp: number[] = new Array(n + 1);
+  for (let j = 0; j <= n; j++) {
+    dp[j] = j;
+  }
+  
+  for (let i = 1; i <= m; i++) {
+    let prev = dp[0];
+    dp[0] = i;
+    for (let j = 1; j <= n; j++) {
+      const temp = dp[j];
+      if (str1[i - 1] === str2[j - 1]) {
+        dp[j] = prev;
+      } else {
+        dp[j] = Math.min(
+          prev + 1,
+          dp[j] + 1,
+          dp[j - 1] + 1,
+        );
+      }
+      prev = temp;
+    }
+  }
+  
+  return dp[n];
 }
 
 function calculateSimilarity(str1: string, str2: string): number {
@@ -193,30 +254,43 @@ function calculateSimilarity(str1: string, str2: string): number {
   if (s1.length === 0 || s2.length === 0) return 0;
   
   const maxLen = Math.max(s1.length, s2.length);
-  let matches = 0;
+  const distance = levenshteinDistance(s1, s2);
   
-  for (let i = 0; i < s1.length; i++) {
-    if (s2.includes(s1[i])) {
-      matches++;
-    }
-  }
-  
-  return matches / maxLen;
+  return 1 - distance / maxLen;
 }
 
 async function checkSimilarQuestions(content: string, subject: string): Promise<string[]> {
   const similarQuestions: string[] = [];
+  const batchSize = 100;
+  let cursor: number | undefined = undefined;
   
-  const allQuestions = await prisma.question.findMany({
-    where: { subject },
-    select: { id: true, content: true },
-  });
-  
-  for (const q of allQuestions) {
-    const similarity = calculateSimilarity(content, q.content);
-    if (similarity >= 0.85) {
-      similarQuestions.push(`题目ID #${q.id}: ${q.content.substring(0, 50)}...`);
+  while (true) {
+    const batch: Array<{ id: number; content: string }> = await prisma.question.findMany({
+      where: {
+        subject,
+        ...(cursor !== undefined ? { id: { gt: cursor } } : {}),
+      },
+      select: { id: true, content: true },
+      orderBy: { id: 'asc' },
+      take: batchSize,
+    });
+    
+    if (batch.length === 0) {
+      break;
     }
+    
+    for (const q of batch) {
+      const similarity = calculateSimilarity(content, q.content);
+      if (similarity >= 0.85) {
+        similarQuestions.push(`题目ID #${q.id}: ${q.content.substring(0, 50)}...`);
+      }
+    }
+    
+    if (batch.length < batchSize) {
+      break;
+    }
+    
+    cursor = batch[batch.length - 1].id;
   }
   
   return similarQuestions;
@@ -341,3 +415,12 @@ export function generateTemplateBuffer(): Buffer {
   XLSX.utils.book_append_sheet(wb, ws, '题目导入模板');
   return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
 }
+
+export const _testHelpers = {
+  parseOptions,
+  calculateSimilarity,
+  levenshteinDistance,
+  validateQuestion,
+  typeMapping,
+  difficultyMapping,
+};
