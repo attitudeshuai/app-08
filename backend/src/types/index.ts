@@ -327,3 +327,38 @@ export interface ActivityCalendarItem {
   questionCount: number;
   studyTime: number;
 }
+
+export interface QuestionTag {
+  id: number;
+  name: string;
+  color: string | null;
+  createdAt: Date;
+  updatedAt?: Date;
+  count?: number;
+}
+
+export interface FavoriteQuestionItem {
+  id: number;
+  createdAt: Date;
+  question: {
+    id: number;
+    type: string;
+    content: string;
+    options?: unknown;
+    score: number;
+    analysis?: string | null;
+    subject: string;
+    difficulty: string;
+  };
+  tags: QuestionTag[];
+}
+
+export interface FavoriteStatus {
+  isFavorited: boolean;
+  tags?: QuestionTag[];
+}
+
+export interface FavoriteSubjectItem {
+  subject: string;
+  count: number;
+}

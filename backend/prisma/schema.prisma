@@ -26,6 +26,8 @@ model User {
   examReservations     ExamReservation[]
   notifications        Notification[]
   questionHistory      QuestionHistory[]
+  questionTags         QuestionTag[]
+  favoriteQuestions    FavoriteQuestion[]
 }
 
 model Question {
@@ -48,6 +50,7 @@ model Question {
   paperTemplateItems PaperTemplateItem[]
   wrongQuestions     WrongQuestion[]
   history            QuestionHistory[]
+  favoriteQuestions  FavoriteQuestion[]
 }
 
 model QuestionHistory {
@@ -256,4 +259,51 @@ model Notification {
   @@index([userId])
   @@index([isRead])
   @@index([type])
+}
+
+model QuestionTag {
+  id        Int      @id @default(autoincrement())
+  name      String
+  color     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  userId Int  @map("userId")
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  favoriteQuestions FavoriteQuestionTag[]
+
+  @@unique([userId, name])
+  @@index([userId])
+}
+
+model FavoriteQuestion {
+  id        Int      @id @default(autoincrement())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  userId     Int      @map("userId")
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  questionId Int      @map("questionId")
+  question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  tags FavoriteQuestionTag[]
+
+  @@unique([userId, questionId])
+  @@index([userId])
+  @@index([questionId])
+}
+
+model FavoriteQuestionTag {
+  id         Int      @id @default(autoincrement())
+  createdAt  DateTime @default(now())
+
+  favoriteId Int              @map("favoriteId")
+  favorite   FavoriteQuestion @relation(fields: [favoriteId], references: [id], onDelete: Cascade)
+  tagId      Int              @map("tagId")
+  tag        QuestionTag      @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@unique([favoriteId, tagId])
+  @@index([favoriteId])
+  @@index([tagId])
 }
