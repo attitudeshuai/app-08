@@ -3,7 +3,15 @@ import prisma from '../lib/prisma';
 import { authMiddleware, roleMiddleware } from '../middleware/auth';
 import { success, badRequest, notFound } from '../utils/response';
 import { getPaginationParams, buildPaginatedResult } from '../utils/pagination';
-import { calculateExamScore, getWrongQuestions, isAnswerCorrect } from '../services/paperService';
+import {
+  calculateExamScore,
+  getWrongQuestions,
+  buildScoreRanges,
+  calculateScoreDistribution,
+  calculateQuestionStats,
+  calculateDimensionStats,
+  roundToTwo,
+} from '../services/paperService';
 import { ExamStatus, ExamRecordStatus, ExamMonitorItem } from '../types';
 
 const router = new Router({ prefix: '/api/exams' });
@@ -737,183 +745,6 @@ router.get('/:id/statistics', authMiddleware, roleMiddleware('ADMIN', 'TEACHER')
 
   success(ctx, statistics);
 });
-
-function buildScoreRanges(totalScore: number): Array<{ range: string; min: number; max: number }> {
-  const ranges: Array<{ range: string; min: number; max: number }> = [];
-  const interval = Math.ceil(totalScore / 10);
-
-  for (let i = 0; i < 10; i++) {
-    const min = i * interval;
-    const max = i === 9 ? totalScore : (i + 1) * interval - 0.01;
-    const rangeLabel = i === 9
-      ? `${Math.floor(min)}-${totalScore}`
-      : `${Math.floor(min)}-${Math.floor((i + 1) * interval - 1)}`;
-    ranges.push({ range: rangeLabel, min, max });
-  }
-
-  return ranges;
-}
-
-function calculateScoreDistribution(
-  scores: number[],
-  ranges: Array<{ range: string; min: number; max: number }>
-): Array<{ range: string; min: number; max: number; count: number; percentage: number }> {
-  const total = scores.length;
-
-  return ranges.map((r) => {
-    const count = scores.filter((s) => s >= r.min && s <= r.max).length;
-    return {
-      range: r.range,
-      min: r.min,
-      max: r.max,
-      count,
-      percentage: total > 0 ? roundToTwo(count / total) : 0,
-    };
-  });
-}
-
-function calculateQuestionStats(
-  paperItems: any[],
-  submittedRecords: any[]
-): any[] {
-  if (submittedRecords.length === 0) {
-    return paperItems.map((item: any) => ({
-      questionId: item.questionId,
-      sortOrder: item.sortOrder,
-      type: item.question.type,
-      content: item.question.content,
-      score: item.score,
-      difficulty: item.question.difficulty,
-      subject: item.question.subject,
-      correctCount: 0,
-      wrongCount: 0,
-      unansweredCount: 0,
-      ungradedCount: 0,
-      accuracyRate: 0,
-      avgScore: 0,
-      scoreRate: 0,
-      isObjective: isObjectiveQuestion(item.question.type),
-    }));
-  }
-
-  const totalRecords = submittedRecords.length;
-
-  return paperItems.map((item: any) => {
-    let correctCount = 0;
-    let wrongCount = 0;
-    let unansweredCount = 0;
-    let ungradedCount = 0;
-    let totalGotScore = 0;
-
-    const objective = isObjectiveQuestion(item.question.type);
-
-    for (const record of submittedRecords) {
-      const answers = record.answers as Record<number, string> | undefined;
-      const userAnswer = answers ? answers[item.questionId] : undefined;
-      const hasAnswer = userAnswer !== undefined && userAnswer !== null && userAnswer !== '';
-
-      if (!hasAnswer) {
-        unansweredCount++;
-        continue;
-      }
-
-      if (!objective) {
-        ungradedCount++;
-        continue;
-      }
-
-      const correct = isAnswerCorrect(item.question.type, userAnswer, item.question.answer);
-
-      if (correct) {
-        correctCount++;
-        totalGotScore += item.score;
-      } else {
-        wrongCount++;
-      }
-    }
-
-    const gradedCount = correctCount + wrongCount;
-    const accuracyRate = gradedCount > 0 ? roundToTwo(correctCount / gradedCount) : 0;
-    const avgScore = totalRecords > 0 ? roundToTwo(totalGotScore / totalRecords) : 0;
-    const scoreRate = item.score > 0 ? roundToTwo(avgScore / item.score) : 0;
-
-    return {
-      questionId: item.questionId,
-      sortOrder: item.sortOrder,
-      type: item.question.type,
-      content: item.question.content,
-      score: item.score,
-      difficulty: item.question.difficulty,
-      subject: item.question.subject,
-      correctCount,
-      wrongCount,
-      unansweredCount,
-      ungradedCount,
-      accuracyRate,
-      avgScore,
-      scoreRate,
-      isObjective: objective,
-    };
-  });
-}
-
-function isObjectiveQuestion(questionType: string): boolean {
-  return (
-    questionType === 'SINGLE_CHOICE' ||
-    questionType === 'MULTIPLE_CHOICE' ||
-    questionType === 'TRUE_FALSE' ||
-    questionType === 'FILL_BLANK'
-  );
-}
-
-function roundToTwo(num: number): number {
-  return Math.round(num * 100) / 100;
-}
-
-function calculateDimensionStats(
-  questionStats: any[],
-  dimension: 'type' | 'difficulty' | 'subject'
-): any[] {
-  const groups: Record<string, any[]> = {};
-
-  for (const qs of questionStats) {
-    const key = String(qs[dimension]);
-    if (!groups[key]) {
-      groups[key] = [];
-    }
-    groups[key].push(qs);
-  }
-
-  const result: any[] = [];
-  for (const [name, items] of Object.entries(groups)) {
-    const questionCount = items.length;
-    const totalScore = items.reduce((sum: number, item: any) => sum + item.score, 0);
-    const totalCorrectCount = items.reduce((sum: number, item: any) => sum + item.correctCount, 0);
-    const totalWrongCount = items.reduce((sum: number, item: any) => sum + item.wrongCount, 0);
-    const totalUngradedCount = items.reduce((sum: number, item: any) => sum + item.ungradedCount, 0);
-    const totalAvgScore = items.reduce((sum: number, item: any) => sum + item.avgScore, 0);
-
-    const gradedTotal = totalCorrectCount + totalWrongCount;
-    const accuracyRate = gradedTotal > 0
-      ? roundToTwo(totalCorrectCount / gradedTotal)
-      : 0;
-    const avgScore = roundToTwo(totalAvgScore);
-    const scoreRate = totalScore > 0 ? roundToTwo(avgScore / totalScore) : 0;
-
-    result.push({
-      name,
-      questionCount,
-      totalScore,
-      correctCount: totalCorrectCount,
-      ungradedCount: totalUngradedCount,
-      accuracyRate,
-      avgScore,
-      scoreRate,
-    });
-  }
-
-  return result;
-}
 
 router.get('/:id/monitor/export', authMiddleware, roleMiddleware('ADMIN', 'TEACHER'), async (ctx) => {
   const examId = Number(ctx.params.id);

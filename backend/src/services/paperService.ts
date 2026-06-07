@@ -1,5 +1,5 @@
 import prisma from '../lib/prisma';
-import { QuestionType, Difficulty } from '../types';
+import { QuestionType, Difficulty, QuestionStatItem, DimensionStatItem, ScoreDistributionItem } from '../types';
 
 export interface AutoGenerateParams {
   subject: string;
@@ -191,4 +191,203 @@ export function getWrongQuestions(
   }
 
   return wrongItems;
+}
+
+export function isObjectiveQuestion(questionType: string): boolean {
+  return (
+    questionType === 'SINGLE_CHOICE' ||
+    questionType === 'MULTIPLE_CHOICE' ||
+    questionType === 'TRUE_FALSE' ||
+    questionType === 'FILL_BLANK'
+  );
+}
+
+export function roundToTwo(num: number): number {
+  return Math.round(num * 100) / 100;
+}
+
+export function buildScoreRanges(totalScore: number): Array<{ range: string; min: number; max: number }> {
+  const ranges: Array<{ range: string; min: number; max: number }> = [];
+  const interval = Math.ceil(totalScore / 10);
+
+  for (let i = 0; i < 10; i++) {
+    const min = i * interval;
+    const max = i === 9 ? totalScore : (i + 1) * interval - 0.01;
+    const rangeLabel = i === 9
+      ? `${Math.floor(min)}-${totalScore}`
+      : `${Math.floor(min)}-${Math.floor((i + 1) * interval - 1)}`;
+    ranges.push({ range: rangeLabel, min, max });
+  }
+
+  return ranges;
+}
+
+export function calculateScoreDistribution(
+  scores: number[],
+  ranges: Array<{ range: string; min: number; max: number }>
+): ScoreDistributionItem[] {
+  const total = scores.length;
+
+  return ranges.map((r) => {
+    const count = scores.filter((s) => s >= r.min && s <= r.max).length;
+    return {
+      range: r.range,
+      min: r.min,
+      max: r.max,
+      count,
+      percentage: total > 0 ? roundToTwo(count / total) : 0,
+    };
+  });
+}
+
+interface PaperItemForStats {
+  questionId: number;
+  sortOrder: number;
+  score: number;
+  question: {
+    type: string;
+    content: string;
+    answer: string;
+    difficulty: string;
+    subject: string;
+  };
+}
+
+interface ExamRecordForStats {
+  answers: Record<number, string> | undefined;
+}
+
+export function calculateQuestionStats(
+  paperItems: PaperItemForStats[],
+  submittedRecords: ExamRecordForStats[]
+): QuestionStatItem[] {
+  if (submittedRecords.length === 0) {
+    return paperItems.map((item) => ({
+      questionId: item.questionId,
+      sortOrder: item.sortOrder,
+      type: item.question.type,
+      content: item.question.content,
+      score: item.score,
+      difficulty: item.question.difficulty,
+      subject: item.question.subject,
+      correctCount: 0,
+      wrongCount: 0,
+      unansweredCount: 0,
+      ungradedCount: 0,
+      accuracyRate: 0,
+      avgScore: 0,
+      scoreRate: 0,
+      isObjective: isObjectiveQuestion(item.question.type),
+    }));
+  }
+
+  const totalRecords = submittedRecords.length;
+
+  return paperItems.map((item) => {
+    let correctCount = 0;
+    let wrongCount = 0;
+    let unansweredCount = 0;
+    let ungradedCount = 0;
+    let totalGotScore = 0;
+
+    const objective = isObjectiveQuestion(item.question.type);
+
+    for (const record of submittedRecords) {
+      const userAnswer = record.answers ? record.answers[item.questionId] : undefined;
+      const hasAnswer = userAnswer !== undefined && userAnswer !== null && userAnswer !== '';
+
+      if (!hasAnswer) {
+        unansweredCount++;
+        continue;
+      }
+
+      if (!objective) {
+        ungradedCount++;
+        continue;
+      }
+
+      const correct = isAnswerCorrect(item.question.type, userAnswer, item.question.answer);
+
+      if (correct) {
+        correctCount++;
+        totalGotScore += item.score;
+      } else {
+        wrongCount++;
+      }
+    }
+
+    const gradedCount = correctCount + wrongCount;
+    const accuracyRate = gradedCount > 0 ? roundToTwo(correctCount / gradedCount) : 0;
+    const avgScore = totalRecords > 0 ? roundToTwo(totalGotScore / totalRecords) : 0;
+    const scoreRate = item.score > 0 && totalRecords > 0
+      ? roundToTwo(totalGotScore / (item.score * totalRecords))
+      : 0;
+
+    return {
+      questionId: item.questionId,
+      sortOrder: item.sortOrder,
+      type: item.question.type,
+      content: item.question.content,
+      score: item.score,
+      difficulty: item.question.difficulty,
+      subject: item.question.subject,
+      correctCount,
+      wrongCount,
+      unansweredCount,
+      ungradedCount,
+      accuracyRate,
+      avgScore,
+      scoreRate,
+      isObjective: objective,
+    };
+  });
+}
+
+export function calculateDimensionStats(
+  questionStats: QuestionStatItem[],
+  dimension: 'type' | 'difficulty' | 'subject'
+): DimensionStatItem[] {
+  const groups: Record<string, QuestionStatItem[]> = {};
+
+  for (const qs of questionStats) {
+    const key = String(qs[dimension]);
+    if (!groups[key]) {
+      groups[key] = [];
+    }
+    groups[key].push(qs);
+  }
+
+  const result: DimensionStatItem[] = [];
+  for (const [name, items] of Object.entries(groups)) {
+    const questionCount = items.length;
+    const totalScore = items.reduce((sum, item) => sum + item.score, 0);
+    const totalCorrectCount = items.reduce((sum, item) => sum + item.correctCount, 0);
+    const totalUngradedCount = items.reduce((sum, item) => sum + item.ungradedCount, 0);
+
+    const totalAvgScore = items.reduce((sum, item) => sum + item.avgScore, 0);
+    const avgScore = questionCount > 0 ? roundToTwo(totalAvgScore / questionCount) : 0;
+
+    const gradedTotal = items.reduce(
+      (sum, item) => sum + item.correctCount + item.wrongCount,
+      0
+    );
+    const accuracyRate = gradedTotal > 0
+      ? roundToTwo(totalCorrectCount / gradedTotal)
+      : 0;
+
+    const scoreRate = totalScore > 0 ? roundToTwo(totalAvgScore / totalScore) : 0;
+
+    result.push({
+      name,
+      questionCount,
+      totalScore,
+      correctCount: totalCorrectCount,
+      ungradedCount: totalUngradedCount,
+      accuracyRate,
+      avgScore,
+      scoreRate,
+    });
+  }
+
+  return result;
 }
