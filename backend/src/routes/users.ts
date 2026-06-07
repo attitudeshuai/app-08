@@ -7,6 +7,12 @@ import { getPaginationParams, buildPaginatedResult } from '../utils/pagination';
 import { config } from '../config';
 import { UserRole } from '../types';
 import { getLearningOverview } from '../services/learningStatsService';
+import {
+  getStudentAbilityAnalysis,
+  getAbilityRadarData,
+  getWeakKnowledgePoints,
+  getRecommendedQuestions as getRecommendedQuestionsService,
+} from '../services/studentAbilityService';
 
 const router = new Router({ prefix: '/api/users' });
 
@@ -31,6 +37,40 @@ router.get('/me/learning-overview', authMiddleware, async (ctx) => {
 
   const overview = await getLearningOverview(userId, days);
   success(ctx, overview);
+});
+
+router.get('/me/ability-analysis', authMiddleware, async (ctx) => {
+  const userId = ctx.state.user.id;
+  const recommendCount = ctx.query.recommendCount
+    ? Number(ctx.query.recommendCount)
+    : undefined;
+
+  const analysis = await getStudentAbilityAnalysis(userId, recommendCount);
+  success(ctx, analysis);
+});
+
+router.get('/me/ability-radar', authMiddleware, async (ctx) => {
+  const userId = ctx.state.user.id;
+
+  const radarData = await getAbilityRadarData(userId);
+  success(ctx, radarData);
+});
+
+router.get('/me/weak-knowledge-points', authMiddleware, async (ctx) => {
+  const userId = ctx.state.user.id;
+  const maxCount = ctx.query.maxCount ? Number(ctx.query.maxCount) : undefined;
+
+  const weakPoints = await getWeakKnowledgePoints(userId, maxCount);
+  success(ctx, weakPoints);
+});
+
+router.get('/me/recommended-questions', authMiddleware, async (ctx) => {
+  const userId = ctx.state.user.id;
+  const count = ctx.query.count ? Number(ctx.query.count) : undefined;
+
+  const weakPoints = await getWeakKnowledgePoints(userId);
+  const questions = await getRecommendedQuestionsService(userId, weakPoints, count);
+  success(ctx, questions);
 });
 
 router.get('/', authMiddleware, roleMiddleware('ADMIN', 'TEACHER'), async (ctx) => {

@@ -497,3 +497,51 @@ export interface QuestionDiscussionLikeStatus {
   isLiked: boolean;
   likeCount: number;
 }
+
+export interface RadarDimension {
+  name: string;
+  key: string;
+  value: number;
+  fullMark: number;
+  description: string;
+}
+
+export interface AbilityRadarData {
+  dimensions: RadarDimension[];
+  overallScore: number;
+  examCount: number;
+  analysisDate: Date;
+}
+
+export interface WeakKnowledgePoint {
+  subject: string;
+  knowledgePoint: string;
+  wrongCount: number;
+  totalCount: number;
+  errorRate: number;
+  difficulty: string;
+  avgWrongTime: number;
+  relatedQuestionIds: number[];
+  suggestion: string;
+}
+
+export interface RecommendedQuestion {
+  id: number;
+  type: string;
+  content: string;
+  options?: unknown;
+  score: number;
+  analysis?: string | null;
+  subject: string;
+  difficulty: string;
+  answer: string;
+  reason: string;
+  relatedWeakPoint: string;
+}
+
+export interface StudentAbilityAnalysis {
+  radarData: AbilityRadarData;
+  weakKnowledgePoints: WeakKnowledgePoint[];
+  recommendedQuestions: RecommendedQuestion[];
+  overallSummary: string;
+}
