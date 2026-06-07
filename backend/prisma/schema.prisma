@@ -70,6 +70,7 @@ model QuestionHistory {
 
   question Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
 
+  @@unique([questionId, version])
   @@index([questionId])
   @@index([modifiedBy])
 }

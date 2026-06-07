@@ -15,6 +15,7 @@ CREATE TABLE `QuestionHistory` (
     `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     `modifiedById` INTEGER NOT NULL,
 
+    UNIQUE INDEX `QuestionHistory_questionId_version_key`(`questionId`, `version`),
     INDEX `QuestionHistory_questionId_idx`(`questionId`),
     INDEX `QuestionHistory_modifiedById_idx`(`modifiedById`),
     PRIMARY KEY (`id`)
