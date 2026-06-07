@@ -106,6 +106,7 @@ router.post('/from-paper/:paperId', authMiddleware, async (ctx) => {
     description?: string;
   };
   const userId = ctx.state.user.id;
+  const userRole = ctx.state.user.role;
 
   const paper = await prisma.paper.findUnique({
     where: { id: paperId },
@@ -118,6 +119,11 @@ router.post('/from-paper/:paperId', authMiddleware, async (ctx) => {
 
   if (!paper) {
     notFound(ctx, '试卷');
+    return;
+  }
+
+  if (paper.createdBy !== userId && userRole !== 'ADMIN') {
+    forbidden(ctx, '无权将此试卷保存为模板');
     return;
   }
 
@@ -150,12 +156,13 @@ router.post('/from-paper/:paperId', authMiddleware, async (ctx) => {
 router.put('/:id', authMiddleware, async (ctx) => {
   const id = Number(ctx.params.id);
   const userId = ctx.state.user.id;
-  const { name, description, duration, items } = ctx.request.body as {
+  const body = ctx.request.body as {
     name?: string;
     description?: string;
     duration?: number;
     items?: Array<{ questionId: number; score: number; sortOrder?: number }>;
   };
+  const { name, description, duration, items } = body;
 
   const existing = await prisma.paperTemplate.findUnique({ where: { id } });
   if (!existing) {
@@ -168,10 +175,22 @@ router.put('/:id', authMiddleware, async (ctx) => {
     return;
   }
 
-  if (items && items.length > 0) {
+  const itemsProvided = items !== undefined;
+
+  if (itemsProvided) {
     await prisma.paperTemplateItem.deleteMany({ where: { templateId: id } });
 
-    const totalScore = items.reduce((sum: number, item: any) => sum + (item.score || 0), 0);
+    const totalScore = Array.isArray(items) && items.length > 0
+      ? items.reduce((sum: number, item: any) => sum + (item.score || 0), 0)
+      : 0;
+
+    const createData = Array.isArray(items) && items.length > 0
+      ? items.map((item: any, index: number) => ({
+          questionId: item.questionId,
+          sortOrder: item.sortOrder || index + 1,
+          score: item.score,
+        }))
+      : [];
 
     const template = await prisma.paperTemplate.update({
       where: { id },
@@ -180,13 +199,9 @@ router.put('/:id', authMiddleware, async (ctx) => {
         description: description !== undefined ? description : existing.description,
         duration: duration || existing.duration,
         totalScore,
-        items: {
-          create: items.map((item: any, index: number) => ({
-            questionId: item.questionId,
-            sortOrder: item.sortOrder || index + 1,
-            score: item.score,
-          })),
-        },
+        items: createData.length > 0
+          ? { create: createData }
+          : undefined,
       },
       include: { items: true },
     });
@@ -251,6 +266,19 @@ router.post('/:id/apply', authMiddleware, async (ctx) => {
 
   if (!title) {
     badRequest(ctx, '请输入试卷标题');
+    return;
+  }
+
+  const questionIds = template.items.map((item: any) => item.questionId);
+  const existingQuestions = await prisma.question.findMany({
+    where: { id: { in: questionIds } },
+    select: { id: true },
+  });
+  const existingQuestionIds = new Set(existingQuestions.map((q: any) => q.id));
+  const missingQuestionIds = questionIds.filter((qid: number) => !existingQuestionIds.has(qid));
+
+  if (missingQuestionIds.length > 0) {
+    badRequest(ctx, `模板中有 ${missingQuestionIds.length} 道题目已被删除（题目ID：${missingQuestionIds.join(', ')}），无法基于此模板创建试卷，请先更新模板`);
     return;
   }
 
